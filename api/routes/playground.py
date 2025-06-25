@@ -136,6 +136,9 @@ class OptimizedPlaygroundManager:
         print("🔄 Принудительное обновление playground...")
         self._last_update = 0  # Сбрасываем время для принудительного обновления
         
+        # Очищаем локальный кэш статических агентов
+        self._static_agents_cache.clear()
+        
         # Обновляем через кэш менеджер
         cache_manager.refresh_playground()
         

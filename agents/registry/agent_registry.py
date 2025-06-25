@@ -82,12 +82,14 @@ class AgentRegistry:
         if cached_agent:
             return cached_agent
         
-        # Создаем агента
+        # Создаем агента через изолированную фабрику
         agent = None
         
         # Сначала проверяем статических агентов
         if agent_id in self._static_agents:
-            agent = self._static_agents[agent_id](
+            agent = self.isolated_factory.create_agent(
+                agent_type='static',
+                agent_id=agent_id,
                 model_id=model_id,
                 user_id=user_id,
                 session_id=session_id,
@@ -95,7 +97,8 @@ class AgentRegistry:
             )
         else:
             # Затем ищем в динамических агентах
-            agent = self._get_dynamic_agent(
+            agent = self.isolated_factory.create_agent(
+                agent_type='dynamic',
                 agent_id=agent_id,
                 model_id=model_id,
                 user_id=user_id,

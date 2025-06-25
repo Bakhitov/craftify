@@ -9,6 +9,7 @@ from agno.storage.agent.postgres import PostgresAgentStorage
 from agno.tools.duckduckgo import DuckDuckGoTools
 
 from db.session import db_url
+from agents.factory.agno_compatibility_adapter import agno_adapter
 
 
 def get_web_agent(
@@ -17,22 +18,23 @@ def get_web_agent(
     session_id: Optional[str] = None,
     debug_mode: bool = True,
 ) -> Agent:
-    return Agent(
-        name="Web Search Agent",
-        agent_id="web_search_agent",
-        user_id=user_id,
-        session_id=session_id,
-        model=OpenAIChat(id=model_id),
+    # Параметры агента
+    agent_params = {
+        "name": "Web Search Agent",
+        "agent_id": "web_search_agent",
+        "user_id": user_id,
+        "session_id": session_id,
+        "model": OpenAIChat(id=model_id),
         # Tools available to the agent
-        tools=[DuckDuckGoTools()],
+        "tools": [DuckDuckGoTools()],
         # Description of the agent
-        description=dedent("""\
+        "description": dedent("""\
             You are WebX, an advanced Web Search Agent designed to deliver accurate, context-rich information from the web.
 
             Your responses should be clear, concise, and supported by citations from the web.
         """),
         # Instructions for the agent
-        instructions=dedent("""\
+        "instructions": dedent("""\
             As WebX, your goal is to provide users with accurate, context-rich information from the web. Follow these steps meticulously:
 
             1. Understand and Search:
@@ -72,30 +74,33 @@ def get_web_agent(
             - The user's name might be different from the user_id, you may ask for it if needed and add it to your memory if they share it with you.\
         """),
         # This makes `current_user_id` available in the instructions
-        add_state_in_messages=True,
+        "add_state_in_messages": True,
         # -*- Storage -*-
         # Storage chat history and session state in a Postgres table
-        storage=PostgresAgentStorage(table_name="sessions", schema="public", db_url=db_url),
+        "storage": PostgresAgentStorage(table_name="sessions", schema="public", db_url=db_url),
         # -*- History -*-
         # Send the last 3 messages from the chat history
-        add_history_to_messages=True,
-        num_history_runs=3,
+        "add_history_to_messages": True,
+        "num_history_runs": 3,
         # Add a tool to read the chat history if needed
-        read_chat_history=True,
+        "read_chat_history": True,
         # -*- Memory -*-
         # Enable agentic memory where the Agent can personalize responses to the user
-        memory=Memory(
+        "memory": Memory(
             model=OpenAIChat(id=model_id),
             db=PostgresMemoryDb(table_name="user_memories", schema="public", db_url=db_url),
             delete_memories=True,
             clear_memories=True,
         ),
-        enable_agentic_memory=True,
+        "enable_agentic_memory": True,
         # -*- Other settings -*-
         # Format responses using markdown
-        markdown=True,
+        "markdown": True,
         # Add the current date and time to the instructions
-        add_datetime_to_instructions=True,
+        "add_datetime_to_instructions": True,
         # Show debug logs
-        debug_mode=debug_mode,
-    )
+        "debug_mode": debug_mode,
+    }
+    
+    # Используем адаптер совместимости для безопасного создания
+    return agno_adapter.create_agent_safely(**agent_params)

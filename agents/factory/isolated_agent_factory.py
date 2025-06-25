@@ -66,17 +66,14 @@ class IsolatedAgentFactory:
         # Импортируем статических агентов
         try:
             if agent_id == 'agno_assist':
-                from agents.static.agno_assist import AgnoAssist
-                agent_class = AgnoAssist()
-                return agent_class.get_agent()
+                from agents.static.agno_assist import get_agno_assist
+                return get_agno_assist(**kwargs)
             elif agent_id == 'finance_agent':
-                from agents.static.finance_agent import FinanceAgent
-                agent_class = FinanceAgent()
-                return agent_class.get_agent()
+                from agents.static.finance_agent import get_finance_agent
+                return get_finance_agent(**kwargs)
             elif agent_id == 'web_agent':
-                from agents.static.web_agent import WebAgent
-                agent_class = WebAgent()
-                return agent_class.get_agent()
+                from agents.static.web_agent import get_web_agent
+                return get_web_agent(**kwargs)
             else:
                 print(f"Неизвестный статический агент: {agent_id}")
                 return None
