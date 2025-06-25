@@ -1,0 +1,270 @@
+"""
+Единый реестр для статических и динамических агентов.
+Обеспечивает изоляцию и единую точку доступа.
+Использует изолированную архитектуру для совместимости с Agno.
+"""
+import time
+from typing import Dict, List, Optional, Callable
+from agno.agent import Agent
+
+# Импорты статических агентов
+from agents.static.agno_assist import get_agno_assist
+from agents.static.finance_agent import get_finance_agent  
+from agents.static.web_agent import get_web_agent
+
+# Импорт фабрики динамических агентов
+from agents.dynamic.agent_factory import DynamicAgentFactory
+
+# Импорт изолированной фабрики
+from agents.factory.isolated_agent_factory import IsolatedAgentFactory
+
+
+class AgentRegistry:
+    """
+    Единый реестр для статических и динамических агентов.
+    Обеспечивает изоляцию между статическими и динамическими агентами,
+    используя только стандартные классы agno.
+    Использует изолированную фабрику для создания агентов.
+    """
+    
+    def __init__(self):
+        # Изолированная фабрика для создания агентов
+        self.isolated_factory = IsolatedAgentFactory()
+        
+        # Статические агенты - определены в файлах
+        self._static_agents: Dict[str, Callable] = {
+            'agno_assist': get_agno_assist,
+            'finance_agent': get_finance_agent,
+            'web_agent': get_web_agent
+        }
+        
+        # Кэш для динамических агентов
+        self._dynamic_cache: Dict[str, Dict] = {}
+        self._cache_ttl = 300  # 5 минут
+        self._last_dynamic_refresh = 0
+    
+    def get_agent(
+        self,
+        agent_id: str,
+        model_id: str = "gpt-4.1",
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        debug_mode: bool = True
+    ) -> Agent:
+        """
+        Получает агента (статического или динамического) с кэшированием.
+        
+        Args:
+            agent_id: ID агента
+            model_id: ID модели
+            user_id: ID пользователя
+            session_id: ID сессии
+            debug_mode: Режим отладки
+            
+        Returns:
+            Экземпляр Agent
+            
+        Raises:
+            ValueError: Если агент не найден
+        """
+        # Импорт кэш менеджера
+        from agents.cache import cache_manager
+        
+        # Проверяем кэш сначала
+        cached_agent = cache_manager.get_agent(
+            agent_id=agent_id,
+            model_id=model_id,
+            user_id=user_id,
+            session_id=session_id,
+            debug_mode=debug_mode
+        )
+        
+        if cached_agent:
+            return cached_agent
+        
+        # Создаем агента
+        agent = None
+        
+        # Сначала проверяем статических агентов
+        if agent_id in self._static_agents:
+            agent = self._static_agents[agent_id](
+                model_id=model_id,
+                user_id=user_id,
+                session_id=session_id,
+                debug_mode=debug_mode
+            )
+        else:
+            # Затем ищем в динамических агентах
+            agent = self._get_dynamic_agent(
+                agent_id=agent_id,
+                model_id=model_id,
+                user_id=user_id,
+                session_id=session_id,
+                debug_mode=debug_mode
+            )
+        
+        # Кэшируем созданного агента
+        if agent:
+            cache_manager.set_agent(agent_id, agent, ttl=600)
+        
+        return agent
+    
+    def get_available_agents(self) -> List[str]:
+        """
+        Возвращает список всех доступных агентов (статических и динамических) с кэшированием.
+        
+        Returns:
+            Список ID агентов
+        """
+        # Импорт кэш менеджера
+        from agents.cache import cache_manager
+        
+        # Проверяем кэш
+        cached_list = cache_manager.get_agents_list()
+        if cached_list:
+            return cached_list
+        
+        # Создаем список
+        static_agents = list(self._static_agents.keys())
+        dynamic_agents = self._get_dynamic_agent_ids()
+        all_agents = static_agents + dynamic_agents
+        
+        # Кэшируем результат
+        cache_manager.set_agents_list(all_agents, ttl=300)
+        
+        return all_agents
+    
+    def get_static_agents(self) -> List[str]:
+        """Возвращает список статических агентов"""
+        return list(self._static_agents.keys())
+    
+    def get_dynamic_agents(self) -> List[str]:
+        """Возвращает список динамических агентов"""
+        return self._get_dynamic_agent_ids()
+    
+    def is_static_agent(self, agent_id: str) -> bool:
+        """Проверяет является ли агент статическим"""
+        return agent_id in self._static_agents
+    
+    def is_dynamic_agent(self, agent_id: str) -> bool:
+        """Проверяет является ли агент динамическим"""
+        return agent_id in self._get_dynamic_agent_ids()
+    
+    def refresh_cache(self, agent_id: Optional[str] = None):
+        """
+        Обновляет кэш агентов (локальный и глобальный).
+        
+        Args:
+            agent_id: ID конкретного агента для обновления (если None, обновляются все)
+        """
+        # Импорт кэш менеджера
+        from agents.cache import cache_manager
+        
+        if agent_id:
+            # Удаляем конкретного агента из локального кэша
+            self._dynamic_cache.pop(agent_id, None)
+            # Обновляем глобальный кэш
+            cache_manager.refresh_agent(agent_id)
+            # Очищаем кэш конфигураций для динамических агентов
+            if self.is_dynamic_agent(agent_id):
+                from agents.dynamic.agent_factory import DynamicAgentFactory
+                DynamicAgentFactory.clear_config_cache(agent_id)
+        else:
+            # Очищаем локальный кэш
+            self._dynamic_cache.clear()
+            self._last_dynamic_refresh = 0
+            # Обновляем глобальный кэш
+            cache_manager.refresh_all()
+            # Очищаем весь кэш конфигураций
+            from agents.dynamic.agent_factory import DynamicAgentFactory
+            DynamicAgentFactory.clear_config_cache()
+    
+    def _get_dynamic_agent(
+        self, 
+        agent_id: str, 
+        model_id: str, 
+        user_id: Optional[str], 
+        session_id: Optional[str], 
+        debug_mode: bool
+    ) -> Agent:
+        """Получает динамического агента используя фабрику"""
+        agent = DynamicAgentFactory.create_agent_from_db(
+            agent_id=agent_id,
+            model_id=model_id,
+            user_id=user_id,
+            session_id=session_id,
+            debug_mode=debug_mode
+        )
+        
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+            
+        return agent
+    
+    def _get_dynamic_agent_ids(self) -> List[str]:
+        """
+        Получает список ID динамических агентов с кэшированием.
+        
+        Returns:
+            Список ID динамических агентов
+        """
+        current_time = time.time()
+        
+        # Проверяем нужно ли обновить кэш
+        if (current_time - self._last_dynamic_refresh) > self._cache_ttl:
+            try:
+                dynamic_ids = DynamicAgentFactory.get_dynamic_agent_ids()
+                self._dynamic_cache['agent_ids'] = {
+                    'data': dynamic_ids,
+                    'timestamp': current_time
+                }
+                self._last_dynamic_refresh = current_time
+                return dynamic_ids
+            except Exception as e:
+                print(f"Ошибка при обновлении списка динамических агентов: {e}")
+                # Возвращаем данные из кэша если есть
+                if 'agent_ids' in self._dynamic_cache:
+                    return self._dynamic_cache['agent_ids']['data']
+                return []
+        
+        # Возвращаем данные из кэша
+        if 'agent_ids' in self._dynamic_cache:
+            return self._dynamic_cache['agent_ids']['data']
+        
+        return []
+    
+    def get_agent_info(self, agent_id: str) -> Dict[str, any]:
+        """
+        Получает информацию об агенте.
+        
+        Args:
+            agent_id: ID агента
+            
+        Returns:
+            Словарь с информацией об агенте
+        """
+        if self.is_static_agent(agent_id):
+            return {
+                "agent_id": agent_id,
+                "type": "static",
+                "source": "file",
+                "editable": False
+            }
+        elif self.is_dynamic_agent(agent_id):
+            return {
+                "agent_id": agent_id,
+                "type": "dynamic", 
+                "source": "database",
+                "editable": True
+            }
+        else:
+            return {
+                "agent_id": agent_id,
+                "type": "unknown",
+                "source": "none",
+                "editable": False
+            }
+
+
+# Глобальный экземпляр реестра
+agent_registry = AgentRegistry() 

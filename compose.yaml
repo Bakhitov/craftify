@@ -1,18 +1,4 @@
 services:
-  pgvector:
-    image: agnohq/pgvector:16
-    restart: unless-stopped
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    environment:
-      POSTGRES_USER: ${DB_USER:-ai}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-ai}
-      POSTGRES_DB: ${DB_NAME:-ai}
-    networks:
-      - agent-api
-
   api:
     build:
       context: .
@@ -26,24 +12,32 @@ services:
       - .:/app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ELEVEN_LABS_API_KEY: ${ELEVEN_LABS_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       # AGNO_MONITOR: "True"
       # AGNO_API_KEY: ${AGNO_API_KEY}
-      DB_HOST: pgvector
-      DB_PORT: 5432
-      DB_USER: ${DB_USER:-ai}
-      DB_PASS: ${DB_PASSWORD:-ai}
-      DB_DATABASE: ${DB_NAME:-ai}
-      WAIT_FOR_DB: "True"
+      # Используем переменные для подключения к Supabase
+      DB_HOST: db.wyehpfzafbjfvyjzgjss.supabase.co
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASSWORD}
+      DB_DATABASE: ${DB_NAME}
+      DB_SCHEME: ${DB_SCHEME}
       PRINT_ENV_ON_LOAD: "True"
+      # Redis конфигурация
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
     networks:
       - agent-api
-    depends_on:
-      - pgvector
+    # Убираем depends_on так как больше не зависим от локальной базы
+    # depends_on:
+    #   - pgvector
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
 networks:
   agent-api:
 
-volumes:
-  pgdata:
+# Убираем volumes для локальной базы данных
+# volumes:
+#   pgdata:

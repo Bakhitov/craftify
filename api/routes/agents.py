@@ -7,8 +7,8 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from agents.agno_assist import get_agno_assist_knowledge
-from agents.selector import AgentType, get_agent, get_available_agents
+from agents.static.agno_assist import get_agno_assist_knowledge
+from agents.selector import get_agent, get_available_agents
 
 logger = getLogger(__name__)
 
@@ -58,14 +58,14 @@ class RunRequest(BaseModel):
     """Request model for an running an agent"""
 
     message: str
-    stream: bool = True
+    stream: bool = False
     model: Model = Model.gpt_4_1
     user_id: Optional[str] = None
     session_id: Optional[str] = None
 
 
 @agents_router.post("/{agent_id}/runs", status_code=status.HTTP_200_OK)
-async def create_agent_run(agent_id: AgentType, body: RunRequest):
+async def create_agent_run(agent_id: str, body: RunRequest):
     """
     Sends a message to a specific agent and returns the response.
 
@@ -80,8 +80,8 @@ async def create_agent_run(agent_id: AgentType, body: RunRequest):
 
     try:
         agent: Agent = get_agent(
-            model_id=body.model.value,
             agent_id=agent_id,
+            model_id=body.model.value,
             user_id=body.user_id,
             session_id=body.session_id,
         )
@@ -102,7 +102,7 @@ async def create_agent_run(agent_id: AgentType, body: RunRequest):
 
 
 @agents_router.post("/{agent_id}/knowledge/load", status_code=status.HTTP_200_OK)
-async def load_agent_knowledge(agent_id: AgentType):
+async def load_agent_knowledge(agent_id: str):
     """
     Loads the knowledge base for a specific agent.
 
@@ -114,7 +114,7 @@ async def load_agent_knowledge(agent_id: AgentType):
     """
     agent_knowledge: Optional[AgentKnowledge] = None
 
-    if agent_id == AgentType.AGNO_ASSIST:
+    if agent_id == "agno_assist":
         agent_knowledge = get_agno_assist_knowledge()
     else:
         raise HTTPException(

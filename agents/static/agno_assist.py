@@ -20,6 +20,7 @@ def get_agno_assist_knowledge() -> AgentKnowledge:
         vector_db=PgVector(
             db_url=db_url,
             table_name="agno_assist_knowledge",
+            schema="public",
             search_type=SearchType.hybrid,
             embedder=OpenAIEmbedder(id="text-embedding-3-small"),
         ),
@@ -105,7 +106,7 @@ def get_agno_assist(
         search_knowledge=True,
         # -*- Storage -*-
         # Storage chat history and session state in a Postgres table
-        storage=PostgresAgentStorage(table_name="agno_assist_sessions", db_url=db_url),
+        storage=PostgresAgentStorage(table_name="sessions", schema="public", db_url=db_url),
         # -*- History -*-
         # Send the last 3 messages from the chat history
         add_history_to_messages=True,
@@ -116,7 +117,7 @@ def get_agno_assist(
         # Enable agentic memory where the Agent can personalize responses to the user
         memory=Memory(
             model=OpenAIChat(id=model_id),
-            db=PostgresMemoryDb(table_name="user_memories", db_url=db_url),
+            db=PostgresMemoryDb(table_name="user_memories", schema="public", db_url=db_url),
             delete_memories=True,
             clear_memories=True,
         ),

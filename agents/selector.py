@@ -1,34 +1,60 @@
-from enum import Enum
+"""
+Единая точка доступа к агентам - делегирует все операции в agent_registry.
+Принципы: DRY (Don't Repeat Yourself), единая ответственность, простота.
+"""
 from typing import List, Optional
+from agno.agent import Agent
+from agents.registry.agent_registry import agent_registry
 
-from agents.agno_assist import get_agno_assist
-from agents.finance_agent import get_finance_agent
-from agents.web_agent import get_web_agent
-
-
-class AgentType(Enum):
-    WEB_AGENT = "web_agent"
-    AGNO_ASSIST = "agno_assist"
-    FINANCE_AGENT = "finance_agent"
-
+# === ЕДИНАЯ ТОЧКА ДОСТУПА - ВСЕ ЧЕРЕЗ REGISTRY ===
 
 def get_available_agents() -> List[str]:
-    """Returns a list of all available agent IDs."""
-    return [agent.value for agent in AgentType]
+    """Возвращает список всех доступных агентов"""
+    return agent_registry.get_available_agents()
 
 
 def get_agent(
-    model_id: str = "gpt-4.1",
-    agent_id: Optional[AgentType] = None,
+    agent_id: str,
+    model_id: str = "gpt-4.1", 
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     debug_mode: bool = True,
-):
-    if agent_id == AgentType.WEB_AGENT:
-        return get_web_agent(model_id=model_id, user_id=user_id, session_id=session_id, debug_mode=debug_mode)
-    elif agent_id == AgentType.AGNO_ASSIST:
-        return get_agno_assist(model_id=model_id, user_id=user_id, session_id=session_id, debug_mode=debug_mode)
-    elif agent_id == AgentType.FINANCE_AGENT:
-        return get_finance_agent(model_id=model_id, user_id=user_id, session_id=session_id, debug_mode=debug_mode)
+) -> Agent:
+    """Получает агента по ID (статического или динамического)"""
+    return agent_registry.get_agent(
+        agent_id=agent_id,
+        model_id=model_id,
+        user_id=user_id,
+        session_id=session_id,
+        debug_mode=debug_mode
+    )
 
-    raise ValueError(f"Agent: {agent_id} not found")
+
+def get_static_agents() -> List[str]:
+    """Возвращает список статических агентов"""
+    return agent_registry.get_static_agents()
+
+
+def get_dynamic_agents() -> List[str]:
+    """Возвращает список динамических агентов"""
+    return agent_registry.get_dynamic_agents()
+
+
+def is_static_agent(agent_id: str) -> bool:
+    """Проверяет является ли агент статическим"""
+    return agent_registry.is_static_agent(agent_id)
+
+
+def is_dynamic_agent(agent_id: str) -> bool:
+    """Проверяет является ли агент динамическим"""
+    return agent_registry.is_dynamic_agent(agent_id)
+
+
+def get_agent_info(agent_id: str) -> dict:
+    """Получает информацию об агенте"""
+    return agent_registry.get_agent_info(agent_id)
+
+
+def refresh_agent_cache(agent_id: Optional[str] = None):
+    """Обновляет кэш агентов"""
+    return agent_registry.refresh_cache(agent_id)

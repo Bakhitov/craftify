@@ -1,8 +1,15 @@
+import warnings
+# Игнорируем предупреждение pydub о ffmpeg - мы используем OpenAI Whisper для аудио
+warnings.filterwarnings("ignore", message="Couldn't find ffmpeg or avconv")
+
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
+from logging import getLogger
 
 from api.routes.v1_router import v1_router
 from api.settings import api_settings
+
+logger = getLogger(__name__)
 
 
 def create_app() -> FastAPI:
