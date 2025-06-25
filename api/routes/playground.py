@@ -179,33 +179,47 @@ def refresh_playground_cache():
     """Обратная совместимость - использует оптимизированный менеджер"""
     return playground_manager.refresh_playground()
 
-# Получаем playground instance через оптимизированный менеджер
-playground_instance = playground_manager.get_playground_instance()
+######################################################
+## АГНО-совместимый Playground Router 
+######################################################
 
-if playground_instance:
-    # Получаем роутер для playground
-    playground_router = playground_instance.get_async_router()
-else:
-    # Создаем пустой роутер если агенты не загрузились
-    from fastapi import APIRouter
-    playground_router = APIRouter()
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
-# Добавляем эндпоинты для управления playground
-from fastapi import APIRouter, HTTPException
-playground_management_router = APIRouter(prefix="/playground", tags=["Playground Management"])
+# Создаем статический роутер (стандартный подход Agno)
+def create_playground_router():
+    """Создает playground router используя стандартный API Agno"""
+    current_instance = playground_manager.get_playground_instance()
+    if current_instance:
+        return current_instance.get_async_router()
+    else:
+        # Возвращаем пустой роутер если playground недоступен
+        return APIRouter()
+
+# Инициализируем роутер при старте (стандартный подход)
+playground_router = create_playground_router()
+
+######################################################
+## АГНО-совместимый Playground Management Router
+######################################################
+
+# Роутер для управления playground (отдельно от нативных endpoints)
+playground_management_router = APIRouter(prefix="/playground", tags=["playground-management"])
 
 @playground_management_router.post("/refresh")
 async def refresh_playground():
-    """Принудительно обновляет playground (оптимизированно)"""
+    """Принудительно обновляет playground (АГНО-совместимый)"""
     try:
         success = playground_manager.refresh_playground()
+        
         if success:
             return {
                 "status": "success", 
-                "message": "Playground refreshed with optimizations",
+                "message": "Playground refreshed successfully (Agno-compatible)",
                 "cache_info": {
                     "static_agents_cached": len(playground_manager._static_agents_cache),
-                    "last_update": playground_manager._last_update
+                    "last_update": playground_manager._last_update,
+                    "agno_compatible": True
                 }
             }
         else:
@@ -232,23 +246,35 @@ async def refresh_playground():
 
 @playground_management_router.post("/refresh/agent/{agent_id}")
 async def refresh_single_agent(agent_id: str):
-    """Обновляет конкретного агента (инкрементально)"""
+    """Обновляет конкретного агента (АГНО-совместимый)"""
     try:
+        # Импортируем DynamicAgentFactory для очистки кэша
+        from agents.dynamic.agent_factory import DynamicAgentFactory
+        
         # Пробуем обновить статического агента
         if playground_manager.refresh_static_agent(agent_id):
             return {
                 "status": "success",
-                "message": f"Static agent {agent_id} refreshed",
-                "agent_type": "static"
+                "message": f"Static agent {agent_id} refreshed (Agno-compatible)",
+                "agent_type": "static",
+                "agno_compatible": True
             }
         
         # Для динамических агентов обновляем через кэш
         cache_manager.refresh_agent(agent_id)
         
+        # КРИТИЧНО: Очищаем кэш DynamicAgentFactory для этого агента
+        DynamicAgentFactory.clear_config_cache(agent_id)
+        
+        # Принудительно обновляем playground для динамических агентов
+        playground_manager._last_update = 0  # Принудительное обновление
+        playground_manager.get_playground_instance()  # Пересоздаем
+        
         return {
             "status": "success", 
-            "message": f"Dynamic agent {agent_id} cache refreshed",
-            "agent_type": "dynamic"
+            "message": f"Dynamic agent {agent_id} refreshed (Agno-compatible)",
+            "agent_type": "dynamic",
+            "agno_compatible": True
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error refreshing agent: {str(e)}")
@@ -256,10 +282,15 @@ async def refresh_single_agent(agent_id: str):
 @playground_management_router.get("/stats")
 async def playground_stats():
     """Статистика playground для мониторинга производительности"""
+    current_router = create_playground_router()
+    routes_count = len(current_router.routes) if current_router else 0
+    
     return {
         "static_agents_cached": len(playground_manager._static_agents_cache),
         "playground_active": playground_manager._playground_instance is not None,
         "last_update": playground_manager._last_update,
         "cache_ttl": playground_manager._cache_ttl,
-        "uptime_seconds": time.time() - playground_manager._last_update if playground_manager._last_update > 0 else 0
+        "uptime_seconds": time.time() - playground_manager._last_update if playground_manager._last_update > 0 else 0,
+        "routes_count": routes_count,
+        "agno_compatible": True
     }

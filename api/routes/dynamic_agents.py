@@ -99,18 +99,19 @@ async def list_dynamic_agents():
             agents = []
             
             for row in result.fetchall():
+                # Данные в БД уже в формате dict/list, не JSON строки
                 agents.append(DynamicAgentResponse(
                     id=row.id,
                     name=row.name,
                     agent_id=row.agent_id,
                     description=row.description,
                     instructions=row.instructions,
-                    model_config_data=ModelConfig(**(json.loads(row.model_config) if row.model_config else {})),
-                    tools_config=json.loads(row.tools_config) if row.tools_config else [],
-                    knowledge_config=KnowledgeConfig(**(json.loads(row.knowledge_config) if row.knowledge_config else {})),
-                    memory_config=MemoryConfig(**(json.loads(row.memory_config) if row.memory_config else {})),
-                    storage_config=StorageConfig(**(json.loads(row.storage_config) if row.storage_config else {})),
-                    settings=AgentSettings(**(json.loads(row.settings) if row.settings else {})),
+                    model_config_data=ModelConfig(**(row.model_config if row.model_config else {})),
+                    tools_config=row.tools_config if row.tools_config else [],
+                    knowledge_config=KnowledgeConfig(**(row.knowledge_config if row.knowledge_config else {})),
+                    memory_config=MemoryConfig(**(row.memory_config if row.memory_config else {})),
+                    storage_config=StorageConfig(**(row.storage_config if row.storage_config else {})),
+                    settings=AgentSettings(**(row.settings if row.settings else {})),
                     is_active=row.is_active,
                     created_at=row.created_at,
                     updated_at=row.updated_at
@@ -163,12 +164,12 @@ async def get_dynamic_agent(agent_id: str):
                 agent_id=row.agent_id,
                 description=row.description,
                 instructions=row.instructions,
-                model_config_data=ModelConfig(**(json.loads(row.model_config) if row.model_config else {})),
-                tools_config=json.loads(row.tools_config) if row.tools_config else [],
-                knowledge_config=KnowledgeConfig(**(json.loads(row.knowledge_config) if row.knowledge_config else {})),
-                memory_config=MemoryConfig(**(json.loads(row.memory_config) if row.memory_config else {})),
-                storage_config=StorageConfig(**(json.loads(row.storage_config) if row.storage_config else {})),
-                settings=AgentSettings(**(json.loads(row.settings) if row.settings else {})),
+                model_config_data=ModelConfig(**(row.model_config if row.model_config else {})),
+                tools_config=row.tools_config if row.tools_config else [],
+                knowledge_config=KnowledgeConfig(**(row.knowledge_config if row.knowledge_config else {})),
+                memory_config=MemoryConfig(**(row.memory_config if row.memory_config else {})),
+                storage_config=StorageConfig(**(row.storage_config if row.storage_config else {})),
+                settings=AgentSettings(**(row.settings if row.settings else {})),
                 is_active=row.is_active,
                 created_at=row.created_at,
                 updated_at=row.updated_at
@@ -216,9 +217,9 @@ async def create_dynamic_agent(agent_data: DynamicAgentRequest):
                 INSERT INTO dynamic_agents 
                 (name, agent_id, description, instructions, model_config, 
                  tools_config, knowledge_config, memory_config, storage_config, settings)
-                VALUES (%(name)s, %(agent_id)s, %(description)s, %(instructions)s, 
-                        %(model_config)s, %(tools_config)s, %(knowledge_config)s, 
-                        %(memory_config)s, %(storage_config)s, %(settings)s)
+                VALUES (:name, :agent_id, :description, :instructions, 
+                        :model_config, :tools_config, :knowledge_config, 
+                        :memory_config, :storage_config, :settings)
                 RETURNING id, created_at, updated_at
             """), {
                 "name": agent_data.name,
@@ -238,6 +239,10 @@ async def create_dynamic_agent(agent_data: DynamicAgentRequest):
             
             # Обновляем кэш
             refresh_agent_cache()
+            
+            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
+            from agents.dynamic.agent_factory import DynamicAgentFactory
+            DynamicAgentFactory.clear_config_cache()
             
             return DynamicAgentResponse(
                 id=row.id,
@@ -297,12 +302,12 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
             # Обновляем агента
             update_query = text("""
                 UPDATE dynamic_agents 
-                SET name = %(name)s, description = %(description)s, instructions = %(instructions)s,
-                    model_config = %(model_config)s, tools_config = %(tools_config)s,
-                    knowledge_config = %(knowledge_config)s, memory_config = %(memory_config)s,
-                    storage_config = %(storage_config)s, settings = %(settings)s,
+                SET name = :name, description = :description, instructions = :instructions,
+                    model_config = :model_config, tools_config = :tools_config,
+                    knowledge_config = :knowledge_config, memory_config = :memory_config,
+                    storage_config = :storage_config, settings = :settings,
                     updated_at = NOW()
-                WHERE agent_id = %(agent_id)s
+                WHERE agent_id = :agent_id
                 RETURNING id, created_at, updated_at
             """)
             
@@ -324,6 +329,10 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
             
             # Обновляем кэш для конкретного агента
             refresh_agent_cache(agent_id)
+            
+            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory для этого агента
+            from agents.dynamic.agent_factory import DynamicAgentFactory
+            DynamicAgentFactory.clear_config_cache(agent_id)
             
             return DynamicAgentResponse(
                 id=row.id,
@@ -389,6 +398,10 @@ async def delete_dynamic_agent(agent_id: str):
             # Обновляем кэш
             refresh_agent_cache()
             
+            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
+            from agents.dynamic.agent_factory import DynamicAgentFactory
+            DynamicAgentFactory.clear_config_cache()
+            
         except HTTPException:
             raise
         except Exception as e:
@@ -430,6 +443,10 @@ async def activate_dynamic_agent(agent_id: str):
             # Обновляем кэш
             refresh_agent_cache()
             
+            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
+            from agents.dynamic.agent_factory import DynamicAgentFactory
+            DynamicAgentFactory.clear_config_cache()
+            
             return {"message": f"Агент {agent_id} успешно активирован"}
             
         except HTTPException:
@@ -450,6 +467,11 @@ async def refresh_agents_cache():
     """
     try:
         refresh_agent_cache()
+        
+        # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
+        from agents.dynamic.agent_factory import DynamicAgentFactory
+        DynamicAgentFactory.clear_config_cache()
+        
         return {"message": "Кэш агентов успешно обновлен"}
     except Exception as e:
         logger.error(f"Ошибка при обновлении кэша агентов: {e}")

@@ -203,6 +203,14 @@ class DynamicAgentFactory:
                 from agno.tools.duckduckgo import DuckDuckGoTools
                 return DuckDuckGoTools()
             
+            elif 'CalculatorTools' in import_path:
+                from agno.tools.calculator import CalculatorTools
+                return CalculatorTools()
+            
+            elif 'SleepTools' in import_path:
+                from agno.tools.sleep import SleepTools
+                return SleepTools()
+            
             elif 'WeatherToolkit' in import_path:
                 from agents.tools.weather_toolkit import WeatherToolkit
                 return WeatherToolkit()
