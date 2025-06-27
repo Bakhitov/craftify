@@ -21,7 +21,8 @@ dependencies = [
   "python-docx",
   "pypdf",
   "aiofiles",
-  "mcp"
+  "mcp",
+  "elevenlabs"
 ]
 
 [project.optional-dependencies]

@@ -1,18 +1,17 @@
 """
-Простая система кэширования для агентов и компонентов.
-Минимальная реализация с событийным обновлением.
+Система кэширования для агентов и инструментов.
+Упрощенная архитектура для максимальной производительности.
 """
 
+from .cache_manager import cache_manager
+from .event_bus import CacheEventBus, EventType
+from .auto_refresh import auto_cache
 from .simple_cache import SimpleCache
-from .event_bus import EventBus
-from .cache_manager import CacheManager
-
-# Глобальный экземпляр менеджера кэша
-cache_manager = CacheManager()
 
 __all__ = [
-    "SimpleCache",
-    "EventBus", 
-    "CacheManager",
-    "cache_manager"
+    "cache_manager",
+    "CacheEventBus", 
+    "EventType",
+    "auto_cache",
+    "SimpleCache"
 ] 

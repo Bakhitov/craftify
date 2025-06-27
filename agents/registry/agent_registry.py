@@ -15,22 +15,15 @@ from agents.static.web_agent import get_web_agent
 # Импорт фабрики динамических агентов
 from agents.dynamic.agent_factory import DynamicAgentFactory
 
-# Импорт изолированной фабрики
-from agents.factory.isolated_agent_factory import IsolatedAgentFactory
-
 
 class AgentRegistry:
     """
     Единый реестр для статических и динамических агентов.
     Обеспечивает изоляцию между статическими и динамическими агентами,
     используя только стандартные классы agno.
-    Использует изолированную фабрику для создания агентов.
     """
     
     def __init__(self):
-        # Изолированная фабрика для создания агентов
-        self.isolated_factory = IsolatedAgentFactory()
-        
         # Статические агенты - определены в файлах
         self._static_agents: Dict[str, Callable] = {
             'agno_assist': get_agno_assist,
@@ -82,13 +75,12 @@ class AgentRegistry:
         if cached_agent:
             return cached_agent
         
-        # Создаем агента через изолированную фабрику
+        # Создаем агента
         agent = None
         
         # Сначала проверяем статических агентов
         if agent_id in self._static_agents:
-            agent = self.isolated_factory.create_agent(
-                agent_type='static',
+            agent = self._create_static_agent(
                 agent_id=agent_id,
                 model_id=model_id,
                 user_id=user_id,
@@ -97,8 +89,7 @@ class AgentRegistry:
             )
         else:
             # Затем ищем в динамических агентах
-            agent = self.isolated_factory.create_agent(
-                agent_type='dynamic',
+            agent = self._create_dynamic_agent(
                 agent_id=agent_id,
                 model_id=model_id,
                 user_id=user_id,
@@ -111,6 +102,58 @@ class AgentRegistry:
             cache_manager.set_agent(agent_id, agent, ttl=600)
         
         return agent
+
+    def _create_static_agent(self, agent_id: str, **kwargs) -> Optional[Agent]:
+        """
+        Создает статического агента.
+        
+        Args:
+            agent_id: ID статического агента
+            **kwargs: Дополнительные параметры
+            
+        Returns:
+            Экземпляр Agent или None
+        """
+        try:
+            if agent_id in self._static_agents:
+                agent_factory = self._static_agents[agent_id]
+                return agent_factory(**kwargs)
+            else:
+                print(f"Неизвестный статический агент: {agent_id}")
+                return None
+                
+        except ImportError as e:
+            print(f"Ошибка импорта статического агента {agent_id}: {e}")
+            return None
+        except Exception as e:
+            print(f"Ошибка создания статического агента {agent_id}: {e}")
+            return None
+
+    def _create_dynamic_agent(
+        self, 
+        agent_id: str, 
+        model_id: str, 
+        user_id: Optional[str], 
+        session_id: Optional[str], 
+        debug_mode: bool
+    ) -> Optional[Agent]:
+        """Создает динамического агента используя фабрику"""
+        try:
+            agent = DynamicAgentFactory.create_agent_from_db(
+                agent_id=agent_id,
+                model_id=model_id,
+                user_id=user_id,
+                session_id=session_id,
+                debug_mode=debug_mode
+            )
+            
+            if not agent:
+                raise ValueError(f"Agent {agent_id} not found")
+                
+            return agent
+        except Exception as e:
+            print(f"Ошибка при создании динамического агента {agent_id}: {e}")
+            return None
     
     def get_available_agents(self) -> List[str]:
         """
@@ -181,29 +224,7 @@ class AgentRegistry:
             # Очищаем весь кэш конфигураций
             from agents.dynamic.agent_factory import DynamicAgentFactory
             DynamicAgentFactory.clear_config_cache()
-    
-    def _get_dynamic_agent(
-        self, 
-        agent_id: str, 
-        model_id: str, 
-        user_id: Optional[str], 
-        session_id: Optional[str], 
-        debug_mode: bool
-    ) -> Agent:
-        """Получает динамического агента используя фабрику"""
-        agent = DynamicAgentFactory.create_agent_from_db(
-            agent_id=agent_id,
-            model_id=model_id,
-            user_id=user_id,
-            session_id=session_id,
-            debug_mode=debug_mode
-        )
-        
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-            
-        return agent
-    
+
     def _get_dynamic_agent_ids(self) -> List[str]:
         """
         Получает список ID динамических агентов с кэшированием.

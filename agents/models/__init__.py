@@ -98,10 +98,12 @@ class AgentSettings(BaseModel):
     
     # --- Session settings ---
     session_name: Optional[str] = Field(default=None, description="Имя сессии")
+    session_state: Optional[Dict[str, Any]] = Field(default=None, description="Состояние сессии")
     search_previous_sessions_history: bool = Field(default=False, description="Поиск по истории предыдущих сессий")
     num_history_sessions: Optional[int] = Field(default=None, description="Количество исторических сессий")
     
     # --- Agent Context ---
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Контекст агента")
     add_context: bool = Field(default=False, description="Добавлять контекст в промпт пользователя")
     resolve_context: bool = Field(default=True, description="Разрешать контекст перед запуском")
     
@@ -118,16 +120,25 @@ class AgentSettings(BaseModel):
     num_history_runs: int = Field(default=3, ge=0, le=50, description="Количество исторических запусков")
     
     # --- Agent Knowledge ---
-    enable_agentic_knowledge_filters: bool = Field(default=False, description="Позволить агенту выбирать фильтры знаний")
+    knowledge_filters: Optional[Dict[str, Any]] = Field(default=None, description="Фильтры для базы знаний")
+    enable_agentic_knowledge_filters: Optional[bool] = Field(default=None, description="Позволить агенту выбирать фильтры знаний")
     add_references: bool = Field(default=False, description="Добавлять ссылки на источники знаний")
+    retriever_function: Optional[str] = Field(default=None, description="Функция для поиска в базе знаний")
     references_format: Literal["json", "yaml"] = Field(default="json", description="Формат ссылок")
+    
+    # --- Agent Storage ---
+    extra_data: Optional[Dict[str, Any]] = Field(default=None, description="Дополнительные данные агента")
     
     # --- Agent Tools ---
     show_tool_calls: bool = Field(default=True, description="Показывать вызовы инструментов")
     tool_call_limit: Optional[int] = Field(default=None, description="Максимальное количество вызовов инструментов")
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(default=None, description="Управление выбором инструментов")
+    tool_hooks: Optional[List[str]] = Field(default=None, description="Список хуков для инструментов (названия функций)")
     
     # --- Agent Reasoning ---
     reasoning: bool = Field(default=False, description="Включить пошаговое рассуждение")
+    reasoning_model_id: Optional[str] = Field(default=None, description="ID модели для рассуждений")
+    reasoning_agent_id: Optional[str] = Field(default=None, description="ID агента для рассуждений")
     reasoning_min_steps: int = Field(default=1, ge=1, description="Минимальное количество шагов рассуждения")
     reasoning_max_steps: int = Field(default=10, ge=1, description="Максимальное количество шагов рассуждения")
     
@@ -138,6 +149,7 @@ class AgentSettings(BaseModel):
     read_tool_call_history: bool = Field(default=False, description="Добавить инструмент get_tool_call_history")
     
     # --- System message settings ---
+    system_message: Optional[str] = Field(default=None, description="Кастомное системное сообщение")
     system_message_role: str = Field(default="system", description="Роль системного сообщения")
     create_default_system_message: bool = Field(default=True, description="Создавать системное сообщение по умолчанию")
     
@@ -155,7 +167,11 @@ class AgentSettings(BaseModel):
     add_state_in_messages: bool = Field(default=False, description="Добавлять состояние сессии в сообщения")
     success_criteria: Optional[str] = Field(default=None, description="Критерии успеха")
     
+    # --- Extra Messages ---
+    add_messages: Optional[List[Dict[str, Any]]] = Field(default=None, description="Дополнительные сообщения для few-shot learning")
+    
     # --- User message settings ---
+    user_message: Optional[str] = Field(default=None, description="Кастомное пользовательское сообщение")
     user_message_role: str = Field(default="user", description="Роль пользовательского сообщения")
     create_default_user_message: bool = Field(default=True, description="Создавать пользовательское сообщение по умолчанию")
     
@@ -165,6 +181,9 @@ class AgentSettings(BaseModel):
     exponential_backoff: bool = Field(default=False, description="Экспоненциальное увеличение задержки")
     
     # --- Agent Response Model Settings ---
+    response_model_class: Optional[str] = Field(default=None, description="Класс Pydantic модели для ответа")
+    parser_model_id: Optional[str] = Field(default=None, description="ID модели для парсинга")
+    parser_model_prompt: Optional[str] = Field(default=None, description="Промпт для модели парсинга")
     parse_response: bool = Field(default=True, description="Парсить ответ в модель")
     structured_outputs: Optional[bool] = Field(default=None, description="Использовать структурированные выводы")
     use_json_mode: bool = Field(default=False, description="Использовать JSON режим")
@@ -176,12 +195,22 @@ class AgentSettings(BaseModel):
     
     # --- Events ---
     store_events: bool = Field(default=False, description="Сохранять события")
+    events_to_skip: Optional[List[str]] = Field(default=None, description="События для пропуска")
     
     # --- Agent Team ---
+    team_members: Optional[List[str]] = Field(default=None, description="ID участников команды")
+    team_data: Optional[Dict[str, Any]] = Field(default=None, description="Данные команды")
     role: Optional[str] = Field(default=None, description="Роль агента в команде")
     respond_directly: bool = Field(default=False, description="Отвечать напрямую пользователю")
     add_transfer_instructions: bool = Field(default=True, description="Добавлять инструкции для передачи задач")
     team_response_separator: str = Field(default="\n", description="Разделитель ответов команды")
+    
+    # --- Team metadata (не передаются в конструктор, но могут быть установлены) ---
+    team_session_id: Optional[str] = Field(default=None, description="ID сессии команды")
+    team_id: Optional[str] = Field(default=None, description="ID команды")
+    app_id: Optional[str] = Field(default=None, description="ID приложения")
+    workflow_id: Optional[str] = Field(default=None, description="ID workflow")
+    team_session_state: Optional[Dict[str, Any]] = Field(default=None, description="Состояние сессии команды")
     
     # --- Debug & Monitoring ---
     debug_mode: bool = Field(default=False, description="Режим отладки")

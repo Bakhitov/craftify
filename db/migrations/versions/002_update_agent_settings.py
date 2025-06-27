@@ -1,7 +1,7 @@
 """Update agent settings with missing agno built-in tools parameters
 
 Revision ID: 002_update_agent_settings
-Revises: 13622ee893de_add_storage_config_to_dynamic_agents
+Revises: 001_create_dynamic_entities
 Create Date: 2024-01-01 00:00:00.000000
 
 """
@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision: str = '002_update_agent_settings'
-down_revision: Union[str, None] = '13622ee893de'
+down_revision: Union[str, None] = '001_create_dynamic_entities'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

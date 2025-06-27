@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 from agno.agent import Agent
 
 from .simple_cache import SimpleCache
-from .event_bus import EventBus, EventType as CacheEventType
+from .event_bus import CacheEventBus, EventType as CacheEventType
 
 
 class CacheManager:
@@ -19,43 +19,37 @@ class CacheManager:
     """
     
     def __init__(self):
-        self.cache = SimpleCache(default_ttl=300)  # 5 минут
-        self.event_bus = EventBus()
+        self.cache = SimpleCache()
+        self.event_bus = CacheEventBus()
+        self._setup_event_handlers()
         self._stats = {
             "cache_hits": 0,
             "cache_misses": 0,
             "refreshes": 0,
             "errors": 0
         }
-        self._setup_events()
     
-    def _setup_events(self):
-        """Настройка простых обработчиков событий"""
-        def clear_agent(data: Dict[str, Any]):
-            agent_id = data.get("agent_id")
-            if agent_id:
-                self.cache.delete(f"agent:{agent_id}")
-                self._stats["refreshes"] += 1
-        
-        def clear_tool(data: Dict[str, Any]):
-            tool_id = data.get("tool_id")
-            if tool_id:
-                self.cache.delete(f"tool:{tool_id}")
-                self._stats["refreshes"] += 1
-        
-        def clear_playground(data: Dict[str, Any]):
-            self.cache.delete("playground:instance")
-            self._stats["refreshes"] += 1
-        
-        def clear_all(data: Dict[str, Any]):
-            self.cache.clear()
-            self._stats["refreshes"] += 1
-        
-        # Регистрируем обработчики
-        self.event_bus.on(CacheEventType.AGENT_UPDATED, clear_agent)
-        self.event_bus.on(CacheEventType.TOOL_UPDATED, clear_tool)
-        self.event_bus.on(CacheEventType.PLAYGROUND_UPDATED, clear_playground)
-        self.event_bus.on(CacheEventType.CACHE_CLEARED, clear_all)
+    def _setup_event_handlers(self):
+        """Настройка обработчиков событий кэша"""
+        def clear_agents(data: Dict[str, Any]):
+            # Очищаем кэш агентов при изменении
+            pattern = f"agent:*"
+            keys = self.cache.get_keys_by_pattern(pattern)
+            for key in keys:
+                self.cache.delete(key)
+            print(f"🧹 Очищен кэш агентов: {len(keys)} ключей")
+
+        def clear_tools(data: Dict[str, Any]):
+            # Очищаем кэш инструментов при изменении  
+            pattern = f"tool:*"
+            keys = self.cache.get_keys_by_pattern(pattern)
+            for key in keys:
+                self.cache.delete(key)
+            print(f"🧹 Очищен кэш инструментов: {len(keys)} ключей")
+
+        # Подписываемся на события
+        self.event_bus.on(CacheEventType.AGENT_UPDATED, clear_agents)
+        self.event_bus.on(CacheEventType.TOOL_UPDATED, clear_tools)
     
     # === ОСНОВНЫЕ МЕТОДЫ КЭША ===
     
@@ -126,17 +120,6 @@ class CacheManager:
         try:
             self.event_bus.emit(CacheEventType.TOOL_UPDATED, {
                 "tool_id": tool_id,
-                "timestamp": time.time()
-            })
-            return True
-        except Exception:
-            self._stats["errors"] += 1
-            return False
-    
-    def refresh_playground(self) -> bool:
-        """Обновление playground"""
-        try:
-            self.event_bus.emit(CacheEventType.PLAYGROUND_UPDATED, {
                 "timestamp": time.time()
             })
             return True

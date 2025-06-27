@@ -30,6 +30,7 @@ from db.url import get_db_url
 
 # URL базы данных
 db_url = get_db_url()
+print(f"🔗 DynamicAgentFactory: db_url = {db_url}")
 
 # Простой кэш конфигураций для производительности
 _config_cache: Dict[str, Dict[str, Any]] = {}
@@ -81,20 +82,44 @@ class DynamicAgentFactory:
                 'add_datetime_to_instructions': True,  # Полезно для контекста
             }
             
-            # Дополнительные настройки только если они есть
+            # Получаем конфигурации из БД
+            memory_config = agent_config.get('memory_config', {})
+            storage_config = agent_config.get('storage_config', {})
+            knowledge_config = agent_config.get('knowledge_config', {})
             settings = agent_config.get('settings', {})
-            if settings.get('memory_enabled'):
-                agent_params['memory'] = DynamicAgentFactory._create_memory_fast(model_id)
             
-            if settings.get('storage_enabled', True):
-                storage_config = agent_config.get('storage_config', {})
-                agent_params['storage'] = DynamicAgentFactory._create_storage_fast(storage_config)
+            # Memory - создаем если включена в конфигурации
+            if memory_config.get('enabled', False):
+                memory = DynamicAgentFactory._create_memory_from_config(model_id, memory_config)
+                if memory:
+                    agent_params['memory'] = memory
+                    agent_params['enable_agentic_memory'] = True
             
-            if settings.get('knowledge_enabled'):
-                knowledge = DynamicAgentFactory._create_knowledge_fast(agent_config.get('knowledge_config', {}))
+            # Storage - создаем если включено в конфигурации (по умолчанию включено)
+            if storage_config.get('enabled', True):
+                storage = DynamicAgentFactory._create_storage_from_config(storage_config)
+                if storage:
+                    agent_params['storage'] = storage
+                    # Включаем history если storage есть
+                    agent_params['add_history_to_messages'] = settings.get('add_history_to_messages', True)
+                    agent_params['num_history_runs'] = settings.get('num_history_runs', 3)
+                    agent_params['read_chat_history'] = settings.get('read_chat_history', True)
+            
+            # Knowledge - создаем если включена в конфигурации
+            if knowledge_config.get('enabled', False):
+                knowledge = DynamicAgentFactory._create_knowledge_fast(knowledge_config)
                 if knowledge:
                     agent_params['knowledge'] = knowledge
                     agent_params['search_knowledge'] = True
+                    agent_params['add_references'] = settings.get('add_references', False)
+            
+            # Применяем дополнительные настройки из settings
+            for key, value in settings.items():
+                if key in ['debug_mode', 'markdown', 'add_datetime_to_instructions', 
+                          'add_location_to_instructions', 'show_tool_calls', 'tool_call_limit',
+                          'reasoning', 'reasoning_min_steps', 'reasoning_max_steps',
+                          'retries', 'delay_between_retries', 'exponential_backoff']:
+                    agent_params[key] = value
             
             # Создаем агента через адаптер совместимости
             return agno_adapter.create_agent_safely(**agent_params)
@@ -162,25 +187,31 @@ class DynamicAgentFactory:
         return OpenAIChat(id=model_id)
     
     @staticmethod
-    def _create_tools_fast(tools_config: List[Dict[str, Any]]) -> List[Union[Function, Toolkit]]:
+    def _create_tools_fast(tools_config: List[Union[Dict[str, Any], "StaticToolConfig", "DynamicToolConfig", "MCPToolConfig"]]) -> List[Union[Function, Toolkit]]:
         """Быстрое создание инструментов"""
         tools = []
         
         for tool_config in tools_config[:10]:  # Ограничиваем 10 инструментами
             try:
-                tool_type = tool_config.get('type', 'static')
+                # Преобразуем типизированные модели в словари для совместимости
+                if hasattr(tool_config, 'dict'):
+                    config_dict = tool_config.dict()
+                else:
+                    config_dict = tool_config
+                
+                tool_type = config_dict.get('type', 'static')
                 
                 if tool_type == 'static':
                     tool = DynamicAgentFactory._import_static_tool_fast(
-                        tool_config.get('import_path', ''),
-                        tool_config.get('init_params', {})
+                        config_dict.get('import_path', ''),
+                        config_dict.get('init_params', {})
                     )
                     if tool:
                         tools.append(tool)
                 
                 elif tool_type == 'dynamic':
                     tool = DynamicToolFactory.create_tool_from_db(
-                        tool_config.get('tool_id', '')
+                        config_dict.get('tool_id', '')
                     )
                     if tool:
                         tools.append(tool)
@@ -227,33 +258,52 @@ class DynamicAgentFactory:
             return None
     
     @staticmethod
-    def _create_memory_fast(model_id: str) -> Optional[Memory]:
-        """Быстрое создание памяти"""
+    def _create_memory_from_config(model_id: str, memory_config: Dict[str, Any]) -> Optional[Memory]:
+        """Создание памяти на основе конфигурации"""
         try:
+            # Получаем db_url из конфигурации или используем глобальный
+            memory_db_url = memory_config.get("db_url") or db_url
+            
+            if not memory_db_url:
+                print(f"⚠️ Ошибка: db_url не найден в конфигурации memory и глобальном значении")
+                return None
+            
             return Memory(
                 model=OpenAIChat(id=model_id),
                 db=PostgresMemoryDb(
-                    table_name="user_memories",
-                    schema="public", 
-                    db_url=db_url
-                )
+                    table_name=memory_config.get("table_name", "user_memories"),
+                    schema=memory_config.get("db_schema", "public"), 
+                    db_url=memory_db_url
+                ),
+                delete_memories=memory_config.get("delete_memories", True),
+                clear_memories=memory_config.get("clear_memories", True)
             )
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Ошибка создания памяти: {e}")
+            print(f"   memory_config: {memory_config}")
+            print(f"   db_url: {db_url}")
             return None
     
     @staticmethod
-    def _create_storage_fast(storage_config: Dict[str, Any] = None) -> Optional[PostgresAgentStorage]:
-        """Быстрое создание хранилища"""
+    def _create_storage_from_config(storage_config: Dict[str, Any]) -> Optional[PostgresAgentStorage]:
+        """Создание хранилища на основе конфигурации"""
         try:
-            if storage_config is None:
-                storage_config = {}
+            # Получаем db_url из конфигурации или используем глобальный
+            storage_db_url = storage_config.get("db_url") or db_url
+            
+            if not storage_db_url:
+                print(f"⚠️ Ошибка: db_url не найден в конфигурации storage и глобальном значении")
+                return None
             
             return PostgresAgentStorage(
                 table_name=storage_config.get("table_name", "sessions"),
-                schema=storage_config.get("schema", "public"),
-                db_url=storage_config.get("db_url", db_url)
+                schema=storage_config.get("db_schema", "public"),
+                db_url=storage_db_url
             )
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Ошибка создания хранилища: {e}")
+            print(f"   storage_config: {storage_config}")
+            print(f"   db_url: {db_url}")
             return None
     
     @staticmethod

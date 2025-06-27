@@ -8,6 +8,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field, validator
 from enum import Enum
 
+# Импорт типизированных моделей инструментов
+from agents.models import StaticToolConfig, DynamicToolConfig, MCPToolConfig
+
 
 class SubscriptionTier(str, Enum):
     """Уровни подписки для SaaS"""
@@ -66,7 +69,10 @@ class TenantAwareAgentConfig(BaseModel):
     
     # Конфигурации
     model_config: Dict[str, Any] = Field(default_factory=dict)
-    tools_config: List[Dict[str, Any]] = Field(default_factory=list)
+    tools_config: List[Union[StaticToolConfig, DynamicToolConfig, MCPToolConfig]] = Field(
+        default_factory=list,
+        description="Типизированная конфигурация инструментов"
+    )
     settings: Dict[str, Any] = Field(default_factory=dict)
     
     # Метаданные
@@ -243,4 +249,7 @@ class PlatformConfig(BaseModel):
     # Настройки производительности
     hot_reload: HotReloadConfig = Field(default_factory=HotReloadConfig)
     enable_metrics_collection: bool = Field(default=True)
-    metrics_retention_days: int = Field(default=30) 
+    metrics_retention_days: int = Field(default=30)
+
+
+ 

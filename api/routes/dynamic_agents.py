@@ -4,26 +4,28 @@ API маршруты для управления динамическими аг
 """
 import json
 from logging import getLogger
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, status, Depends
+from pydantic import BaseModel, Field, validator
 from sqlalchemy import text
 
 from db.session import SessionLocal
 from agents.selector import refresh_agent_cache, get_agent_info
-
-# Импортируем типизированные модели
+from agents.cache.auto_refresh import auto_cache
+from agents.dynamic.agent_factory import DynamicAgentFactory
 from agents.models import (
     DynamicAgentConfig,
     ModelConfig,
     StaticToolConfig,
     DynamicToolConfig,
+    MCPToolConfig,
     KnowledgeConfig,
     MemoryConfig,
     StorageConfig,
-    AgentSettings
+    AgentSettings,
+    validate_tools_config
 )
 
 logger = getLogger(__name__)
@@ -43,14 +45,29 @@ class DynamicAgentRequest(BaseModel):
     agent_id: str = Field(..., description="Уникальный ID агента")
     description: Optional[str] = Field(None, description="Описание агента")
     instructions: Optional[str] = Field(None, description="Инструкции для агента")
+    model_id: str = Field(default="gpt-4o", description="ID модели для агента")
     
-    # Используем типизированные модели вместо Dict[str, Any]
-    model_config_data: ModelConfig = Field(default_factory=ModelConfig, description="Конфигурация модели", alias="model_config")
-    tools_config: List[Dict[str, Any]] = Field(default_factory=list, description="Конфигурация инструментов")  # Пока оставляем Dict для совместимости
-    knowledge_config: KnowledgeConfig = Field(default_factory=KnowledgeConfig, description="Конфигурация знаний")
-    memory_config: MemoryConfig = Field(default_factory=MemoryConfig, description="Конфигурация памяти")
-    storage_config: StorageConfig = Field(default_factory=StorageConfig, description="Конфигурация хранилища")
-    settings: AgentSettings = Field(default_factory=AgentSettings, description="Настройки агента")
+    # Типизированная конфигурация инструментов
+    tools_config: List[Union[StaticToolConfig, DynamicToolConfig, MCPToolConfig]] = Field(
+        default_factory=list, 
+        description="Типизированная конфигурация инструментов"
+    )
+    
+    # Дополнительные настройки
+    max_tokens: Optional[int] = Field(default=None, description="Максимальное количество токенов")
+    temperature: Optional[float] = Field(default=None, description="Температура модели")
+    storage_config: Optional[dict] = Field(default_factory=dict, description="Конфигурация хранилища")
+
+    @validator('tools_config')
+    def validate_tools_config_field(cls, v):
+        """Валидация конфигурации инструментов"""
+        if not isinstance(v, list):
+            raise ValueError("tools_config должен быть списком")
+        
+        # Преобразуем словари в типизированные модели если нужно
+        if v and isinstance(v[0], dict):
+            return validate_tools_config(v)
+        return v
 
 
 class DynamicAgentResponse(BaseModel):
@@ -62,16 +79,19 @@ class DynamicAgentResponse(BaseModel):
     agent_id: str
     description: Optional[str]
     instructions: Optional[str]
+    model_id: str
     
     # Используем типизированные модели
     model_config_data: ModelConfig = Field(alias="model_config")
-    tools_config: List[Dict[str, Any]]  # Пока оставляем Dict для совместимости
+    tools_config: List[Union[StaticToolConfig, DynamicToolConfig, MCPToolConfig]]
     knowledge_config: KnowledgeConfig
     memory_config: MemoryConfig
     storage_config: StorageConfig
     settings: AgentSettings
     
     is_active: bool
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
     created_at: datetime
     updated_at: datetime
 
@@ -200,51 +220,51 @@ async def create_dynamic_agent(agent_data: DynamicAgentRequest):
     with SessionLocal() as session:
         try:
             # Проверяем уникальность agent_id
-            check_query = text("""
-                SELECT COUNT(*) as count FROM dynamic_agents 
-                WHERE agent_id = :agent_id
-            """)
-            
+            check_query = text("SELECT COUNT(*) FROM dynamic_agents WHERE agent_id = :agent_id")
             result = session.execute(check_query, {"agent_id": agent_data.agent_id})
-            if result.fetchone().count > 0:
+            if result.scalar() > 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Агент с ID {agent_data.agent_id} уже существует"
                 )
             
-            # Создаем нового агента
-            result = session.execute(text("""
-                INSERT INTO dynamic_agents 
-                (name, agent_id, description, instructions, model_config, 
-                 tools_config, knowledge_config, memory_config, storage_config, settings)
-                VALUES (:name, :agent_id, :description, :instructions, 
-                        :model_config, :tools_config, :knowledge_config, 
-                        :memory_config, :storage_config, :settings)
-                RETURNING id, created_at, updated_at
-            """), {
+            # Создаем агента
+            insert_query = text("""
+                INSERT INTO dynamic_agents (
+                    name, agent_id, description, instructions,
+                    model_config, tools_config, knowledge_config,
+                    memory_config, storage_config, settings, is_active
+                ) VALUES (
+                    :name, :agent_id, :description, :instructions,
+                    :model_config, :tools_config, :knowledge_config,
+                    :memory_config, :storage_config, :settings, :is_active
+                ) RETURNING id, created_at, updated_at
+            """)
+            
+            result = session.execute(insert_query, {
                 "name": agent_data.name,
                 "agent_id": agent_data.agent_id,
                 "description": agent_data.description,
                 "instructions": agent_data.instructions,
-                "model_config": json.dumps(agent_data.model_config_data.model_dump()),
-                "tools_config": json.dumps(agent_data.tools_config),
-                "knowledge_config": json.dumps(agent_data.knowledge_config.model_dump()),
-                "memory_config": json.dumps(agent_data.memory_config.model_dump()),
-                "storage_config": json.dumps(agent_data.storage_config.model_dump()),
-                "settings": json.dumps(agent_data.settings.model_dump())
+                "model_config": agent_data.model_config_data.model_dump(),
+                "tools_config": agent_data.tools_config,
+                "knowledge_config": agent_data.knowledge_config.model_dump(),
+                "memory_config": agent_data.memory_config.model_dump(),
+                "storage_config": agent_data.storage_config.model_dump(),
+                "settings": agent_data.settings.model_dump(),
+                "is_active": True
             })
             
             row = result.fetchone()
             session.commit()
             
-            # Обновляем кэш
-            refresh_agent_cache()
+            # ✅ Автоматическое обновление кэша после создания
+            auto_cache.refresh_after_agent_operation(agent_data.agent_id, "create")
             
-            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
-            from agents.dynamic.agent_factory import DynamicAgentFactory
-            DynamicAgentFactory.clear_config_cache()
+            # ✅ Уведомляем о новом агенте
+            refresh_agent_cache(agent_data.agent_id)
             
-            return DynamicAgentResponse(
+            response = DynamicAgentResponse(
                 id=row.id,
                 name=agent_data.name,
                 agent_id=agent_data.agent_id,
@@ -261,14 +281,17 @@ async def create_dynamic_agent(agent_data: DynamicAgentRequest):
                 updated_at=row.updated_at
             )
             
+            logger.info(f"Создан динамический агент: {agent_data.agent_id}")
+            return response
+            
         except HTTPException:
             raise
         except Exception as e:
             session.rollback()
-            logger.error(f"Ошибка при создании динамического агента: {e}")
+            logger.error(f"Ошибка при создании динамического агента {agent_data.agent_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Не удалось создать динамического агента"
+                detail=f"Не удалось создать динамического агента {agent_data.agent_id}"
             )
 
 
@@ -287,11 +310,7 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
     with SessionLocal() as session:
         try:
             # Проверяем существование агента
-            check_query = text("""
-                SELECT id FROM dynamic_agents 
-                WHERE agent_id = :agent_id
-            """)
-            
+            check_query = text("SELECT id FROM dynamic_agents WHERE agent_id = :agent_id")
             result = session.execute(check_query, {"agent_id": agent_id})
             if not result.fetchone():
                 raise HTTPException(
@@ -301,12 +320,17 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
             
             # Обновляем агента
             update_query = text("""
-                UPDATE dynamic_agents 
-                SET name = :name, description = :description, instructions = :instructions,
-                    model_config = :model_config, tools_config = :tools_config,
-                    knowledge_config = :knowledge_config, memory_config = :memory_config,
-                    storage_config = :storage_config, settings = :settings,
-                    updated_at = NOW()
+                UPDATE dynamic_agents SET
+                    name = :name,
+                    description = :description,
+                    instructions = :instructions,
+                    model_config = :model_config,
+                    tools_config = :tools_config,
+                    knowledge_config = :knowledge_config,
+                    memory_config = :memory_config,
+                    storage_config = :storage_config,
+                    settings = :settings,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE agent_id = :agent_id
                 RETURNING id, created_at, updated_at
             """)
@@ -316,25 +340,24 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
                 "name": agent_data.name,
                 "description": agent_data.description,
                 "instructions": agent_data.instructions,
-                "model_config": json.dumps(agent_data.model_config_data.model_dump()),
-                "tools_config": json.dumps(agent_data.tools_config),
-                "knowledge_config": json.dumps(agent_data.knowledge_config.model_dump()),
-                "memory_config": json.dumps(agent_data.memory_config.model_dump()),
-                "storage_config": json.dumps(agent_data.storage_config.model_dump()),
-                "settings": json.dumps(agent_data.settings.model_dump())
+                "model_config": agent_data.model_config_data.model_dump(),
+                "tools_config": agent_data.tools_config,
+                "knowledge_config": agent_data.knowledge_config.model_dump(),
+                "memory_config": agent_data.memory_config.model_dump(),
+                "storage_config": agent_data.storage_config.model_dump(),
+                "settings": agent_data.settings.model_dump()
             })
             
             row = result.fetchone()
             session.commit()
             
-            # Обновляем кэш для конкретного агента
+            # ✅ Автоматическое обновление кэша после обновления
+            auto_cache.refresh_after_agent_operation(agent_id, "update")
+            
+            # ✅ Уведомляем об обновлении агента
             refresh_agent_cache(agent_id)
             
-            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory для этого агента
-            from agents.dynamic.agent_factory import DynamicAgentFactory
-            DynamicAgentFactory.clear_config_cache(agent_id)
-            
-            return DynamicAgentResponse(
+            response = DynamicAgentResponse(
                 id=row.id,
                 name=agent_data.name,
                 agent_id=agent_id,
@@ -351,6 +374,9 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
                 updated_at=row.updated_at
             )
             
+            logger.info(f"Обновлен динамический агент: {agent_id}")
+            return response
+            
         except HTTPException:
             raise
         except Exception as e:
@@ -365,7 +391,7 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
 @dynamic_agents_router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dynamic_agent(agent_id: str):
     """
-    Удаляет динамического агента (помечает как неактивного).
+    Удаляет динамического агента (мягкое удаление - устанавливает is_active = false).
     
     Args:
         agent_id: ID агента для удаления
@@ -373,11 +399,7 @@ async def delete_dynamic_agent(agent_id: str):
     with SessionLocal() as session:
         try:
             # Проверяем существование агента
-            check_query = text("""
-                SELECT id FROM dynamic_agents 
-                WHERE agent_id = :agent_id AND is_active = true
-            """)
-            
+            check_query = text("SELECT id FROM dynamic_agents WHERE agent_id = :agent_id AND is_active = true")
             result = session.execute(check_query, {"agent_id": agent_id})
             if not result.fetchone():
                 raise HTTPException(
@@ -385,22 +407,22 @@ async def delete_dynamic_agent(agent_id: str):
                     detail=f"Активный динамический агент {agent_id} не найден"
                 )
             
-            # Помечаем как неактивного
+            # Мягкое удаление
             delete_query = text("""
                 UPDATE dynamic_agents 
-                SET is_active = false, updated_at = CURRENT_TIMESTAMP
+                SET is_active = false, updated_at = CURRENT_TIMESTAMP 
                 WHERE agent_id = :agent_id
             """)
-            
             session.execute(delete_query, {"agent_id": agent_id})
             session.commit()
             
-            # Обновляем кэш
-            refresh_agent_cache()
+            # ✅ Автоматическое обновление кэша после удаления
+            auto_cache.refresh_after_agent_operation(agent_id, "delete")
             
-            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
-            from agents.dynamic.agent_factory import DynamicAgentFactory
-            DynamicAgentFactory.clear_config_cache()
+            # ✅ Уведомляем об удалении агента
+            refresh_agent_cache(agent_id)
+            
+            logger.info(f"Удален динамический агент: {agent_id}")
             
         except HTTPException:
             raise
@@ -416,38 +438,47 @@ async def delete_dynamic_agent(agent_id: str):
 @dynamic_agents_router.post("/{agent_id}/activate", status_code=status.HTTP_200_OK)
 async def activate_dynamic_agent(agent_id: str):
     """
-    Активирует динамического агента.
+    Активирует ранее деактивированного динамического агента.
     
     Args:
         agent_id: ID агента для активации
+        
+    Returns:
+        Dict: Результат операции
     """
     with SessionLocal() as session:
         try:
-            # Активируем агента
-            activate_query = text("""
-                UPDATE dynamic_agents 
-                SET is_active = true, updated_at = CURRENT_TIMESTAMP
-                WHERE agent_id = :agent_id
-            """)
-            
-            result = session.execute(activate_query, {"agent_id": agent_id})
-            
-            if result.rowcount == 0:
+            # Проверяем существование агента
+            check_query = text("SELECT id FROM dynamic_agents WHERE agent_id = :agent_id")
+            result = session.execute(check_query, {"agent_id": agent_id})
+            if not result.fetchone():
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Динамический агент {agent_id} не найден"
                 )
             
+            # Активируем агента
+            activate_query = text("""
+                UPDATE dynamic_agents 
+                SET is_active = true, updated_at = CURRENT_TIMESTAMP 
+                WHERE agent_id = :agent_id
+            """)
+            result = session.execute(activate_query, {"agent_id": agent_id})
             session.commit()
             
-            # Обновляем кэш
-            refresh_agent_cache()
+            # ✅ Автоматическое обновление кэша после активации
+            auto_cache.refresh_after_agent_operation(agent_id, "activate")
             
-            # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
-            from agents.dynamic.agent_factory import DynamicAgentFactory
-            DynamicAgentFactory.clear_config_cache()
+            # ✅ Уведомляем об активации агента
+            refresh_agent_cache(agent_id)
             
-            return {"message": f"Агент {agent_id} успешно активирован"}
+            logger.info(f"Активирован динамический агент: {agent_id}")
+            
+            return {
+                "status": "success",
+                "message": f"Агент {agent_id} успешно активирован",
+                "agent_id": agent_id
+            }
             
         except HTTPException:
             raise
@@ -459,23 +490,4 @@ async def activate_dynamic_agent(agent_id: str):
                 detail=f"Не удалось активировать динамического агента {agent_id}"
             )
 
-
-@dynamic_agents_router.post("/refresh-cache", status_code=status.HTTP_200_OK)
-async def refresh_agents_cache():
-    """
-    Обновляет кэш динамических агентов.
-    """
-    try:
-        refresh_agent_cache()
-        
-        # КРИТИЧНО: Очищаем кэш DynamicAgentFactory
-        from agents.dynamic.agent_factory import DynamicAgentFactory
-        DynamicAgentFactory.clear_config_cache()
-        
-        return {"message": "Кэш агентов успешно обновлен"}
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении кэша агентов: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Не удалось обновить кэш агентов"
-        ) 
+# УДАЛЕНО: Ручное обновление кэша больше не нужно - кэш обновляется автоматически при CRUD операциях 

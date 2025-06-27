@@ -1,7 +1,7 @@
 """add cache triggers
 
 Revision ID: 003_add_cache_triggers
-Revises: 13622ee893de_add_storage_config_to_dynamic_agents
+Revises: 002_update_agent_settings
 Create Date: 2024-12-19 10:00:00.000000
 
 """

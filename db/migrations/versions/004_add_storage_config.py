@@ -1,7 +1,7 @@
 """Add storage_config to dynamic_agents
 
 Revision ID: 004_add_storage_config
-Revises: 13622ee893de_add_storage_config_to_dynamic_agents
+Revises: 003_add_cache_triggers
 Create Date: 2024-12-24 15:00:00.000000
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers
 revision = '004_add_storage_config'
-down_revision = '13622ee893de_add_storage_config_to_dynamic_agents'
+down_revision = '003_add_cache_triggers'
 branch_labels = None
 depends_on = None
 
