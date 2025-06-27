@@ -9,7 +9,6 @@
 3. [Динамические агенты](#dynamic-agents-endpoints)
 4. [Динамические инструменты](#dynamic-tools-endpoints)
 5. [MCP инструменты](#mcp-tools-endpoints)
-6. [Базовые эндпоинты Agno](#agno-base-endpoints)
 
 ---
 
@@ -98,6 +97,75 @@ curl -X POST "http://localhost:8000/v1/agents/agno_assist/runs" \
 ```
 
 **Ответ:** Streaming response с chunks текста.
+
+### POST `/v1/agents/{agent_id}/runs/multipart`
+Отправить сообщение с файлами агенту и получить ответ. Поддерживает загрузку файлов через multipart/form-data.
+
+**Параметры пути:**
+- `agent_id` (string): ID агента
+
+**Тело запроса (multipart/form-data):**
+- `message` (string): Текстовое сообщение для агента
+- `stream` (boolean, optional): Включить потоковый ответ (по умолчанию false)
+- `model` (string, optional): Модель для использования (по умолчанию "gpt-4.1")
+- `user_id` (string, optional): ID пользователя
+- `session_id` (string, optional): ID сессии
+- `files` (array of files, optional): Файлы для обработки (PDF, текст, код, документы)
+- `images` (array of files, optional): Изображения для анализа (PNG, JPEG, WebP, GIF)
+- `audio` (array of files, optional): Аудио файлы для обработки
+- `videos` (array of files, optional): Видео файлы для анализа
+
+**Поддерживаемые форматы файлов:**
+- **Документы**: PDF, TXT, MD, HTML, CSS, RTF, CSV, XML
+- **Код**: Python (.py), JavaScript (.js), и другие текстовые файлы
+- **Изображения**: PNG, JPEG, WebP, GIF
+- **Аудио**: Большинство популярных форматов
+- **Видео**: MP4, MOV, AVI, MKV, WebM и другие
+
+**Пример запроса с curl:**
+```bash
+curl -X POST "http://localhost:8000/v1/agents/web_agent/runs/multipart" \
+  -F "message=Проанализируй этот документ и найди ключевые моменты" \
+  -F "stream=false" \
+  -F "model=gpt-4.1" \
+  -F "user_id=user123" \
+  -F "session_id=session456" \
+  -F "files=@document.pdf" \
+  -F "images=@chart.png"
+```
+
+**Пример запроса с JavaScript (FormData):**
+```javascript
+const formData = new FormData();
+formData.append('message', 'Анализируй загруженные файлы');
+formData.append('stream', 'false');
+formData.append('model', 'gpt-4.1');
+formData.append('files', fileInput.files[0]); // PDF или текстовый файл
+formData.append('images', imageInput.files[0]); // Изображение
+
+fetch('/v1/agents/web_agent/runs/multipart', {
+  method: 'POST',
+  body: formData
+}).then(response => response.text());
+```
+
+**Пример ответа (без streaming):**
+```json
+"Анализ документа показал следующие ключевые моменты:
+1. Основная тема документа касается...
+2. На изображении представлена диаграмма, которая показывает...
+3. Рекомендации по улучшению..."
+```
+
+**Пример запроса со streaming:**
+```bash
+curl -X POST "http://localhost:8000/v1/agents/agno_assist/runs/multipart" \
+  -F "message=Опиши что ты видишь на изображении" \
+  -F "stream=true" \
+  -F "images=@photo.jpg"
+```
+
+**Ответ:** Streaming response с chunks текста в формате text/event-stream.
 
 ### POST `/v1/agents/{agent_id}/knowledge/load`
 Загрузить базу знаний для агента.
@@ -583,379 +651,65 @@ curl -X GET "http://localhost:8000/v1/mcp/docs"
 
 ---
 
-## Agno Base Endpoints
+## Новые эндпоинты агентов
 
-Эти эндпоинты обеспечивают совместимость с базовым фреймворком Agno.
+### GET `/v1/agents/{agent_id}/sessions`
+Получение сессий для конкретного агента (добавлен аналогично native Agno).
 
-### GET `/v1/user/health`
-Проверка состояния пользовательского API.
+**Параметры пути:**
+- `agent_id` (string): ID агента
+
+**Параметры запроса:**
+- `user_id` (optional string): ID пользователя для фильтрации
 
 **Пример запроса:**
 ```bash
-curl -X GET "http://localhost:8000/v1/user/health"
+curl -X GET "http://localhost:8000/v1/agents/agno_assist/sessions?user_id=user123"
 ```
 
 **Пример ответа:**
 ```json
 {
-  "status": "ok",
-  "service": "user-api",
+  "agent_id": "agno_assist",
+  "user_id": "user123",
+  "sessions": [
+    {
+      "session_id": "session_123",
+      "user_id": "user123",
+      "agent_id": "agno_assist",
+      "created_at": 1642284600,
+      "updated_at": 1642284800,
+      "session_data": {
+        "session_name": "Чат с агентом",
+        "session_state": {}
+      },
+      "agent_data": {
+        "model": "gpt-4.1",
+        "name": "Agno Assist"
+      }
+    }
+  ],
+  "total_sessions": 1,
+  "agent_type": "static",
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
 
-### POST `/v1/user/signin`
-Авторизация пользователя.
+---
 
-**Тело запроса:**
-```json
-{
-  "email": "string",
-  "password": "string"
-}
-```
+## Информация об изменениях
 
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v1/user/signin" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "user@example.com",
-    "password": "password123"
-  }'
-```
+**Удалены эндпоинты из `agno_base.py`:**
 
-**Статус:** 501 Not Implemented (пока не реализовано)
+Следующие эндпоинты были перенесены в playground фреймворка Agno согласно архитектуре:
 
-### POST `/v1/user/create/anon`
-Создание анонимного пользователя.
+- `GET /playground/status` - статус playground
+- `GET /playground/agents` - список агентов для playground
+- `POST /playground/agents/{agent_id}/runs` - запуск агента в playground
+- `GET /playground/agents/{agent_id}/sessions` - сессии агента в playground  
+- `GET /status` - общий статус API
 
-**Тело запроса:**
-```json
-{
-  "user": {
-    "email": "anon",
-    "username": "anon", 
-    "is_machine": true
-  }
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v1/user/create/anon" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user": {
-      "email": "anon",
-      "username": "anon",
-      "is_machine": true
-    }
-  }'
-```
-
-### POST `/v1/workspace/create`
-Создание рабочего пространства.
-
-**Тело запроса:**
-```json
-{
-  "user": {
-    "id_user": "string",
-    "email": "string"
-  },
-  "workspace": {
-    "name": "string",
-    "description": "string"
-  },
-  "team": {
-    "id_team": "optional_string"
-  }
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v1/workspace/create" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user": {
-      "id_user": "user123",
-      "email": "user@example.com"
-    },
-    "workspace": {
-      "name": "My Workspace",
-      "description": "Рабочее пространство для проектов"
-    }
-  }'
-```
-
-### POST `/v1/team/read/all`
-Получение всех команд пользователя.
-
-**Тело запроса:**
-```json
-{
-  "user": {
-    "id_user": "string",
-    "email": "string"
-  }
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v1/team/read/all" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user": {
-      "id_user": "user123",
-      "email": "user@example.com"
-    }
-  }'
-```
-
-### POST `/v2/teams`
-Создание команды.
-
-**Тело запроса:**
-```json
-{
-  "team_id": "optional_string",
-  "name": "string",
-  "description": "optional_string",
-  "config": {}
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v2/teams" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Development Team",
-    "description": "Команда разработчиков",
-    "config": {
-      "permissions": ["read", "write"]
-    }
-  }'
-```
-
-### POST `/v1/team-runs`
-Создание запуска команды.
-
-**Тело запроса:**
-```json
-{
-  "run": {
-    "team_id": "string",
-    "run_id": "string",
-    "status": "string"
-  }
-}
-```
-
-### POST `/v1/team-sessions`
-Создание сессии команды.
-
-**Тело запроса:**
-```json
-{
-  "session": {
-    "team_id": "string",
-    "session_id": "string"
-  }
-}
-```
-
-### POST `/v2/agents`
-Создание агента в системе мониторинга.
-
-**Тело запроса:**
-```json
-{
-  "agent_id": "string",
-  "team_id": "optional_string",
-  "app_id": "optional_string", 
-  "workflow_id": "optional_string",
-  "name": "optional_string",
-  "config": {}
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v2/agents" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_id": "monitoring_agent",
-    "name": "Агент мониторинга",
-    "config": {
-      "model": "gpt-4o",
-      "temperature": 0.7
-    }
-  }'
-```
-
-### POST `/v1/agent-sessions`
-Создание сессии агента.
-
-**Тело запроса:**
-```json
-{
-  "session": {
-    "session_id": "string",
-    "agent_id": "string"
-  }
-}
-```
-
-### POST `/v1/agent-runs`
-Создание запуска агента.
-
-**Тело запроса:**
-```json
-{
-  "run": {
-    "run_id": "string",
-    "session_id": "string",
-    "agent_id": "string"
-  }
-}
-```
-
-### POST `/v2/apps`
-Создание приложения.
-
-**Тело запроса:**
-```json
-{
-  "app_id": "optional_string",
-  "name": "string",
-  "description": "optional_string",
-  "config": {}
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v2/apps" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Chat Application",
-    "description": "Приложение для чата с агентами",
-    "config": {
-      "theme": "dark",
-      "features": ["chat", "file_upload"]
-    }
-  }'
-```
-
-### POST `/v2/workflows`
-Создание рабочего процесса.
-
-**Тело запроса:**
-```json
-{
-  "workflow_id": "optional_string",
-  "name": "string", 
-  "description": "optional_string",
-  "config": {}
-}
-```
-
-**Пример запроса:**
-```bash
-curl -X POST "http://localhost:8000/v2/workflows" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Data Processing Workflow",
-    "description": "Рабочий процесс обработки данных",
-    "config": {
-      "steps": ["extract", "transform", "load"],
-      "timeout": 3600
-    }
-  }'
-```
-
-### POST `/v1/playground/endpoint/create`
-Создание эндпоинта в песочнице.
-
-**Тело запроса:**
-```json
-{
-  "playground": {
-    "name": "string",
-    "config": {}
-  }
-}
-```
-
-### POST `/v1/playground/app/deploy`
-Развертывание приложения в песочнице.
-
-### POST `/v2/eval-runs`
-Создание запуска оценки.
-
-**Тело запроса:**
-```json
-{
-  "eval_run": {
-    "eval_id": "string",
-    "config": {}
-  }
-}
-```
-
-### GET `/v1/info`
-Получение информации о системе Agno.
-
-**Пример запроса:**
-```bash
-curl -X GET "http://localhost:8000/v1/info"
-```
-
-**Пример ответа:**
-```json
-{
-  "service": "agno-api",
-  "version": "1.0.0",
-  "description": "Agent API расширение для Agno",
-  "endpoints": {
-    "agents": "/v1/agents",
-    "dynamic_agents": "/v1/dynamic-agents",
-    "tools": "/v1/dynamic-tools",
-    "mcp": "/v1/mcp",
-    "health": "/v1/health"
-  },
-  "features": [
-    "dynamic_agents",
-    "dynamic_tools", 
-    "mcp_integration",
-    "agno_compatibility"
-  ]
-}
-```
-
-### GET `/v1/status`
-Получение статуса системы.
-
-**Пример запроса:**
-```bash
-curl -X GET "http://localhost:8000/v1/status"
-```
-
-**Пример ответа:**
-```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "cache": "active",
-  "mcp": "available",
-  "uptime": "2h 30m 45s",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
+Эти эндпоинты должны обрабатываться нативным playground фреймворка Agno, а не нашей надстройкой.
 
 ---
 

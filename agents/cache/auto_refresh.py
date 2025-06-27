@@ -4,7 +4,6 @@
 """
 import time
 from typing import Dict, Any
-from .cache_manager import cache_manager
 
 
 class AutoCacheRefresh:
@@ -18,15 +17,27 @@ class AutoCacheRefresh:
         self.refresh_count = 0
         self.batch_operations = []
         self.batch_timeout = 1.0  # 1 секунда для батчинга
+        self._cache_manager = None
+    
+    @property
+    def cache_manager(self):
+        """Ленивая загрузка cache_manager для избежания циклических импортов"""
+        if self._cache_manager is None:
+            from .cache_manager import cache_manager
+            self._cache_manager = cache_manager
+        return self._cache_manager
     
     def refresh_after_agent_operation(self, agent_id: str, operation: str = "update"):
         """Обновляет кэш после операции с агентом"""
         try:
             # Обновляем кэш агента
-            cache_manager.refresh_agent(agent_id)
+            self.cache_manager.refresh_agent(agent_id)
             
             # Очищаем список агентов для пересоздания
-            cache_manager.cache.delete("agents:list")
+            self.cache_manager.delete("agents:list")
+            
+            # ВАЖНО: Очищаем также полный кэшированный список агентов
+            self.cache_manager.delete("agents:full_list")
             
             self.refresh_count += 1
             self.last_refresh = time.time()
@@ -39,8 +50,8 @@ class AutoCacheRefresh:
     def refresh_after_tool_operation(self, tool_id: str, operation: str = "update"):
         """Обновляет кэш после операции с инструментом"""
         try:
-            # Обновляем кэш инструмента
-            cache_manager.refresh_tool(tool_id)
+            # Пока у нас нет специального кэша для инструментов
+            # Просто отмечаем операцию
             
             self.refresh_count += 1
             self.last_refresh = time.time()
@@ -67,15 +78,12 @@ class AutoCacheRefresh:
             
             # Обновляем агентов
             for agent_id in agents_to_refresh:
-                cache_manager.refresh_agent(agent_id)
+                self.cache_manager.refresh_agent(agent_id)
             
-            # Обновляем инструменты
-            for tool_id in tools_to_refresh:
-                cache_manager.refresh_tool(tool_id)
-            
-            # Очищаем общие списки
+            # Очищаем общие списки если были изменения агентов
             if agents_to_refresh:
-                cache_manager.cache.delete("agents:list")
+                self.cache_manager.delete("agents:list")
+                self.cache_manager.delete("agents:full_list")
             
             elapsed = time.time() - start_time
             self.refresh_count += len(operations)

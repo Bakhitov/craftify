@@ -22,7 +22,9 @@ dependencies = [
   "pypdf",
   "aiofiles",
   "mcp",
-  "elevenlabs"
+  "elevenlabs",
+  "pillow",
+  "requests"
 ]
 
 [project.optional-dependencies]

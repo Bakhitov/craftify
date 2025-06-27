@@ -20,6 +20,76 @@ class SubscriptionTier(str, Enum):
     ENTERPRISE = "enterprise"
 
 
+class AgentDefaults:
+    """Класс для централизации дефолтных настроек агентов"""
+    
+    @classmethod
+    def get_default_model_config(cls) -> Dict[str, Any]:
+        return {
+            "type": "openai",
+            "id": "gpt-4.1",
+            "temperature": 0.7,
+            "max_tokens": None,
+            "top_p": None,
+            "frequency_penalty": None,
+            "presence_penalty": None
+        }
+    
+    @classmethod
+    def get_default_knowledge_config(cls) -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "type": "url",
+            "sources": [],
+            "table_name": "knowledge",
+            "db_schema": "public",
+            "search_type": "hybrid",
+            "embedder_model": "text-embedding-3-small"
+        }
+    
+    @classmethod
+    def get_default_memory_config(cls) -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "type": "postgres",
+            "memory_model_config": None,
+            "table_name": "user_memories",
+            "db_schema": "public",
+            "delete_memories": True,
+            "clear_memories": True
+        }
+    
+    @classmethod
+    def get_default_storage_config(cls) -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "type": "postgres",
+            "table_name": "sessions",
+            "db_schema": "public",
+            "db_url": None
+        }
+    
+    @classmethod
+    def get_default_settings(cls) -> Dict[str, Any]:
+        return {
+            "enable_agentic_memory": True,
+            "add_history_to_messages": True,
+            "num_history_runs": 3,
+            "read_chat_history": True,
+            "search_knowledge": True,
+            "markdown": True,
+            "add_datetime_to_instructions": True,
+            "add_state_in_messages": True,
+            "debug_mode": True,
+            "retries": 0,
+            "delay_between_retries": 1,
+            "exponential_backoff": False,
+            "show_tool_calls": True,
+            "monitoring": False,
+            "telemetry": True
+        }
+
+
 class TenantConfig(BaseModel):
     """Конфигурация тенанта"""
     tenant_id: str = Field(..., description="Уникальный ID тенанта")
@@ -67,8 +137,8 @@ class TenantAwareAgentConfig(BaseModel):
     is_public: bool = Field(default=False, description="Доступен ли агент другим тенантам")
     shared_with_tenants: List[str] = Field(default_factory=list, description="Список тенантов с доступом")
     
-    # Конфигурации
-    model_config: Dict[str, Any] = Field(default_factory=dict)
+    # Конфигурации (переименовал model_config в agent_model_config чтобы избежать конфликта)
+    agent_model_config: Dict[str, Any] = Field(default_factory=dict)
     tools_config: List[Union[StaticToolConfig, DynamicToolConfig, MCPToolConfig]] = Field(
         default_factory=list,
         description="Типизированная конфигурация инструментов"
@@ -250,6 +320,54 @@ class PlatformConfig(BaseModel):
     hot_reload: HotReloadConfig = Field(default_factory=HotReloadConfig)
     enable_metrics_collection: bool = Field(default=True)
     metrics_retention_days: int = Field(default=30)
+
+
+class StaticAgentResponse(BaseModel):
+    """Упрощенная модель ответа для статического агента"""
+    model_config = {"populate_by_name": True}
+    
+    # Основные поля
+    id: Optional[int] = Field(default=None, description="ID (null для статических агентов)")
+    name: str = Field(..., description="Имя агента")
+    agent_id: str = Field(..., description="ID агента")
+    description: Optional[str] = Field(None, description="Описание агента")
+    instructions: Optional[str] = Field(None, description="Инструкции агента")
+    model_id: str = Field(default="gpt-4.1", description="ID модели")
+    
+    # Конфигурации с использованием AgentDefaults
+    model_config_data: Dict[str, Any] = Field(
+        default_factory=AgentDefaults.get_default_model_config,
+        alias="model_config"
+    )
+    tools_config: List[Dict[str, Any]] = Field(default_factory=list, description="Конфигурация инструментов")
+    knowledge_config: Dict[str, Any] = Field(
+        default_factory=AgentDefaults.get_default_knowledge_config,
+        description="Конфигурация знаний"
+    )
+    memory_config: Dict[str, Any] = Field(
+        default_factory=AgentDefaults.get_default_memory_config,
+        description="Конфигурация памяти"
+    )
+    storage_config: Dict[str, Any] = Field(
+        default_factory=AgentDefaults.get_default_storage_config,
+        description="Конфигурация хранилища"
+    )
+    settings: Dict[str, Any] = Field(
+        default_factory=AgentDefaults.get_default_settings,
+        description="Настройки агента"
+    )
+    
+    # Метаданные
+    is_active: bool = Field(default=True, description="Активен ли агент")
+    max_tokens: Optional[int] = Field(default=None, description="Максимальное количество токенов")
+    temperature: Optional[float] = Field(default=None, description="Температура модели")
+    created_at: Optional[datetime] = Field(default=None, description="Дата создания (null для статических)")
+    updated_at: Optional[datetime] = Field(default=None, description="Дата обновления (null для статических)")
+    
+    # Дополнительные поля для статических агентов
+    agent_type: str = Field(default="static", description="Тип агента")
+    source_file: Optional[str] = Field(default=None, description="Исходный файл агента")
+    editable: bool = Field(default=False, description="Можно ли редактировать агента")
 
 
  

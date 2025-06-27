@@ -6,15 +6,17 @@
 Agent API Platform - это надстройка над фреймворком Agno, обеспечивающая гибкую архитектуру с поддержкой:
 - **Статических агентов** - предопределенные агенты, работающие напрямую из файлов
 - **Динамических агентов** - агенты, создаваемые и управляемые через базу данных
-- **Системы кэширования** - для оптимизации производительности
+- **Системы кэширования** - автоматическое обновление кэша при изменениях
 - **MCP инструментов** - интеграция с Model Context Protocol
-- **Playground интеграции** - совместимость с Agno Playground
+- **Динамических инструментов** - пользовательские инструменты через БД
+- **Мультимедиа поддержка** - обработка файлов, изображений, аудио, видео
 
 ### Ключевые принципы архитектуры
-1. **Изоляция от Agno** - минимальные изменения в базовом фреймворке
-2. **Горячая перезагрузка** - динамическое обновление без перезапуска
-3. **Мультитенантность** - поддержка изоляции между тенантами
+1. **Изоляция от Agno** - минимальные изменения в базовом фреймворке через патчи
+2. **Горячая перезагрузка** - автоматическое обновление кэша при CRUD операциях
+3. **Event-driven кэширование** - система событий для обновления кэша
 4. **Безопасность** - валидация кода и sandbox выполнение
+5. **Pydantic валидация** - типизированные модели для всех API
 
 ## Настройка тестовой среды
 
@@ -56,17 +58,17 @@ curl -X GET "http://localhost:8000/v1/health" \
 
 ### 2. Статические агенты - /v1/agents
 
-#### 2.1 Получение списка агентов
+#### 2.1 Получение списка агентов (проверка кэширования)
 ```bash
-# Получить список всех доступных агентов
+# Получить список всех доступных агентов с полной информацией
 curl -X GET "http://localhost:8000/v1/agents" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ:
-# ["web_agent", "agno_assist", "finance_agent", "dynamic_agent_1", ...]
+# Ожидаемый ответ: массив со статическими и динамическими агентами
+# Включает: id, name, agent_id, description, model_config, tools_config и др.
 ```
 
-#### 2.2 Запуск агента (синхронный)
+#### 2.2 Запуск статического агента (синхронный)
 ```bash
 # Запуск web_agent с простым сообщением
 curl -X POST "http://localhost:8000/v1/agents/web_agent/runs" \
@@ -82,7 +84,7 @@ curl -X POST "http://localhost:8000/v1/agents/web_agent/runs" \
 # Ожидаемый ответ: текстовый ответ агента с результатами поиска
 ```
 
-#### 2.3 Запуск агента (потоковый)
+#### 2.3 Запуск статического агента (потоковый)
 ```bash
 # Запуск finance_agent в потоковом режиме
 curl -X POST "http://localhost:8000/v1/agents/finance_agent/runs" \
@@ -98,7 +100,7 @@ curl -X POST "http://localhost:8000/v1/agents/finance_agent/runs" \
 # Ожидаемый ответ: Server-Sent Events поток с частями ответа
 ```
 
-#### 2.4 Загрузка базы знаний агента
+#### 2.4 Запуск agno_assist с загрузкой знаний
 ```bash
 # Загрузка базы знаний для agno_assist
 curl -X POST "http://localhost:8000/v1/agents/agno_assist/knowledge/load" \
@@ -108,6 +110,32 @@ curl -X POST "http://localhost:8000/v1/agents/agno_assist/knowledge/load" \
 # {
 #   "message": "Knowledge base for agno_assist loaded successfully."
 # }
+```
+
+#### 2.5 Тест мультимедиа загрузки (multipart/form-data)
+```bash
+# Создаем тестовый файл
+echo "Тестовый документ для агента" > test_document.txt
+
+# Запуск агента с файлом
+curl -X POST "http://localhost:8000/v1/agents/agno_assist/runs/multipart" \
+  -F "message=Проанализируй этот документ" \
+  -F "stream=false" \
+  -F "model=gpt-4.1" \
+  -F "user_id=test_user_123" \
+  -F "session_id=test_session_multipart" \
+  -F "files=@test_document.txt"
+
+# Ожидаемый ответ: анализ документа
+```
+
+#### 2.6 Получение сессий агента
+```bash
+# Получить сессии для пользователя
+curl -X GET "http://localhost:8000/v1/agents/web_agent/sessions?user_id=test_user_123" \
+  -H "Content-Type: application/json"
+
+# Ожидаемый ответ: список сессий пользователя
 ```
 
 ### 3. Динамические агенты - /v1/dynamic-agents
@@ -121,7 +149,7 @@ curl -X GET "http://localhost:8000/v1/dynamic-agents" \
 # Ожидаемый ответ: массив объектов DynamicAgentResponse
 ```
 
-#### 3.2 Создание динамического агента
+#### 3.2 Создание динамического агента (проверка автообновления кэша)
 ```bash
 # Создание нового динамического агента
 curl -X POST "http://localhost:8000/v1/dynamic-agents" \
@@ -131,34 +159,28 @@ curl -X POST "http://localhost:8000/v1/dynamic-agents" \
     "agent_id": "test_dynamic_agent",
     "description": "Агент для тестирования API",
     "instructions": "Ты помощник для тестирования. Отвечай кратко и по делу.",
-    "model_config": {
-      "provider": "openai",
-      "model": "gpt-4.1",
-      "temperature": 0.7,
-      "max_tokens": 1000
-    },
+    "model_id": "gpt-4.1",
     "tools_config": [],
-    "knowledge_config": {
-      "enabled": false
-    },
-    "memory_config": {
-      "enabled": true,
-      "memory_type": "simple"
-    },
-    "storage_config": {
-      "enabled": false
-    },
-    "settings": {
-      "stream": true,
-      "debug_mode": true,
-      "markdown": true
-    }
+    "knowledge_config": {},
+    "memory_config": {},
+    "storage_config": {},
+    "settings": {}
   }'
 
 # Ожидаемый ответ: созданный агент с ID и временными метками
+# ВАЖНО: Проверить что кэш обновился автоматически!
 ```
 
-#### 3.3 Получение конкретного динамического агента
+#### 3.3 Проверка автообновления кэша после создания
+```bash
+# Сразу после создания проверяем что агент доступен в общем списке
+curl -X GET "http://localhost:8000/v1/agents" \
+  -H "Content-Type: application/json" | grep "test_dynamic_agent"
+
+# Должен найти созданного агента - кэш обновился автоматически
+```
+
+#### 3.4 Получение конкретного динамического агента
 ```bash
 # Получить агента по ID
 curl -X GET "http://localhost:8000/v1/dynamic-agents/test_dynamic_agent" \
@@ -167,7 +189,7 @@ curl -X GET "http://localhost:8000/v1/dynamic-agents/test_dynamic_agent" \
 # Ожидаемый ответ: полная информация об агенте
 ```
 
-#### 3.4 Обновление динамического агента
+#### 3.5 Обновление динамического агента (проверка кэша)
 ```bash
 # Обновление существующего агента
 curl -X PUT "http://localhost:8000/v1/dynamic-agents/test_dynamic_agent" \
@@ -177,77 +199,52 @@ curl -X PUT "http://localhost:8000/v1/dynamic-agents/test_dynamic_agent" \
     "agent_id": "test_dynamic_agent",
     "description": "Обновленное описание агента",
     "instructions": "Ты обновленный помощник. Теперь отвечай более подробно.",
-    "model_config": {
-      "provider": "openai",
-      "model": "gpt-4.1",
-      "temperature": 0.5,
-      "max_tokens": 1500
-    },
+    "model_id": "gpt-4.1",
     "tools_config": [],
-    "knowledge_config": {
-      "enabled": false
-    },
-    "memory_config": {
-      "enabled": true,
-      "memory_type": "simple"
-    },
-    "storage_config": {
-      "enabled": false
-    },
-    "settings": {
-      "stream": true,
-      "debug_mode": false,
-      "markdown": true
-    }
+    "knowledge_config": {},
+    "memory_config": {},
+    "storage_config": {},
+    "settings": {}
   }'
 
-# Ожидаемый ответ: обновленная информация об агенте
+# Ожидаемый ответ: обновленный агент
+# ВАЖНО: Проверить что кэш обновился автоматически!
 ```
 
-#### 3.5 Активация динамического агента
+#### 3.6 Активация/деактивация агента
 ```bash
 # Активация агента
 curl -X POST "http://localhost:8000/v1/dynamic-agents/test_dynamic_agent/activate" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ:
-# {
-#   "message": "Динамический агент test_dynamic_agent активирован",
-#   "agent_id": "test_dynamic_agent"
-# }
+# Ожидаемый ответ: подтверждение активации
 ```
 
-#### 3.6 Обновление кэша агентов
+#### 3.7 Тестирование динамического агента
 ```bash
-# Обновление кэша всех агентов
-curl -X POST "http://localhost:8000/v1/dynamic-agents/refresh-cache" \
-  -H "Content-Type: application/json"
+# Запуск созданного динамического агента
+curl -X POST "http://localhost:8000/v1/agents/test_dynamic_agent/runs" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Привет! Это тест динамического агента.",
+    "stream": false,
+    "model": "gpt-4.1",
+    "user_id": "test_user_dynamic",
+    "session_id": "test_session_dynamic"
+  }'
 
-# Ожидаемый ответ:
-# {
-#   "message": "Кэш агентов обновлен",
-#   "refreshed_count": 5
-# }
-```
-
-#### 3.7 Удаление динамического агента
-```bash
-# Удаление агента
-curl -X DELETE "http://localhost:8000/v1/dynamic-agents/test_dynamic_agent" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ: HTTP 204 No Content
+# Ожидаемый ответ: ответ от динамического агента
 ```
 
 ### 4. Динамические инструменты - /v1/dynamic-tools
 
-#### 4.1 Получение списка инструментов
+#### 4.1 Получение списка динамических инструментов
 ```bash
 # Получить все динамические инструменты
 curl -X GET "http://localhost:8000/v1/dynamic-tools/" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ: массив объектов ToolResponse
+# Ожидаемый ответ: массив инструментов или пустой массив
 ```
 
 #### 4.2 Валидация кода инструмента
@@ -256,87 +253,122 @@ curl -X GET "http://localhost:8000/v1/dynamic-tools/" \
 curl -X POST "http://localhost:8000/v1/dynamic-tools/validate" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Калькулятор",
-    "tool_id": "calculator_tool",
-    "description": "Простой калькулятор для математических операций",
-    "function_name": "calculate",
+    "name": "Тестовый инструмент",
+    "tool_id": "test_tool",
+    "description": "Простой инструмент для тестирования",
+    "function_name": "test_function",
     "parameters_schema": {
       "type": "object",
       "properties": {
-        "expression": {
+        "message": {
           "type": "string",
-          "description": "Математическое выражение для вычисления"
+          "description": "Сообщение для обработки"
         }
       },
-      "required": ["expression"]
+      "required": ["message"]
     },
-    "implementation": "def calculate(expression: str) -> str:\n    try:\n        result = eval(expression)\n        return f\"Результат: {result}\"\n    except Exception as e:\n        return f\"Ошибка: {str(e)}\""
+    "implementation": "def test_function(message: str) -> str:\n    return f\"Processed: {message}\""
   }'
 
-# Ожидаемый ответ:
-# {
-#   "valid": true,
-#   "message": "Код инструмента валиден"
-# }
+# Ожидаемый ответ: {"valid": true, "message": "..."}
 ```
 
-#### 4.3 Создание динамического инструмента
+#### 4.3 Создание динамического инструмента (проверка автообновления кэша)
 ```bash
-# Создание нового инструмента после валидации
+# Создание нового инструмента
 curl -X POST "http://localhost:8000/v1/dynamic-tools/" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Калькулятор",
-    "tool_id": "calculator_tool",
-    "description": "Простой калькулятор для математических операций",
-    "function_name": "calculate",
+    "name": "Тестовый инструмент",
+    "tool_id": "test_tool",
+    "description": "Простой инструмент для тестирования",
+    "function_name": "test_function",
     "parameters_schema": {
       "type": "object",
       "properties": {
-        "expression": {
+        "message": {
           "type": "string",
-          "description": "Математическое выражение для вычисления"
+          "description": "Сообщение для обработки"
         }
       },
-      "required": ["expression"]
+      "required": ["message"]
     },
-    "implementation": "def calculate(expression: str) -> str:\n    try:\n        result = eval(expression)\n        return f\"Результат: {result}\"\n    except Exception as e:\n        return f\"Ошибка: {str(e)}\""
+    "implementation": "def test_function(message: str) -> str:\n    return f\"Processed: {message}\""
   }'
 
-# Ожидаемый ответ: созданный инструмент с метаданными
+# Ожидаемый ответ: созданный инструмент
+# ВАЖНО: Проверить что кэш инструментов обновился автоматически!
 ```
 
 #### 4.4 Получение конкретного инструмента
 ```bash
 # Получить инструмент по ID
-curl -X GET "http://localhost:8000/v1/dynamic-tools/calculator_tool" \
+curl -X GET "http://localhost:8000/v1/dynamic-tools/test_tool" \
   -H "Content-Type: application/json"
 
 # Ожидаемый ответ: полная информация об инструменте
+```
+
+#### 4.5 Обновление динамического инструмента
+```bash
+# Обновление существующего инструмента
+curl -X PUT "http://localhost:8000/v1/dynamic-tools/test_tool" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Обновленный тестовый инструмент",
+    "tool_id": "test_tool",
+    "description": "Обновленное описание инструмента",
+    "function_name": "test_function",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "Сообщение для обработки"
+        }
+      },
+      "required": ["message"]
+    },
+    "implementation": "def test_function(message: str) -> str:\n    return f\"Updated processed: {message.upper()}\""
+  }'
+
+# Ожидаемый ответ: обновленный инструмент
 ```
 
 ### 5. MCP инструменты - /v1/mcp
 
 #### 5.1 Проверка статуса MCP
 ```bash
-# Проверка поддержки MCP
+# Проверить статус MCP поддержки
 curl -X GET "http://localhost:8000/v1/mcp/status" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ:
-# {
-#   "mcp_available": true,
-#   "supported_transports": ["stdio", "sse", "http"],
-#   "message": "MCP поддерживается"
-# }
+# Ожидаемый ответ: информация о доступности MCP
 ```
 
-#### 5.2 Тестирование MCP stdio сервера
+#### 5.2 Получение примеров MCP
 ```bash
-# Тестирование stdio MCP сервера (требуется аутентификация)
+# Получить примеры конфигураций MCP
+curl -X GET "http://localhost:8000/v1/mcp/examples" \
+  -H "Content-Type: application/json"
+
+# Ожидаемый ответ: примеры конфигураций для stdio, sse, http
+```
+
+#### 5.3 Получение документации MCP
+```bash
+# Получить документацию по MCP
+curl -X GET "http://localhost:8000/v1/mcp/docs" \
+  -H "Content-Type: application/json"
+
+# Ожидаемый ответ: документация по использованию MCP
+```
+
+#### 5.4 Тестирование MCP STDIO (если доступно)
+```bash
+# Тест MCP STDIO сервера (пример с weather сервером)
 curl -X POST "http://localhost:8000/v1/mcp/test/stdio" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_AUTH_TOKEN" \
   -d '{
     "command": "python examples/weather_mcp_server.py",
     "env": {},
@@ -345,292 +377,220 @@ curl -X POST "http://localhost:8000/v1/mcp/test/stdio" \
     "timeout": 30
   }'
 
-# Ожидаемый ответ: информация о сервере и доступных инструментах
+# Ожидаемый ответ: информация о доступных инструментах MCP или ошибка
 ```
 
-#### 5.3 Получение примеров MCP
+### 6. Система кэширования - /v1/cache
+
+#### 6.1 Получение статистики кэша
 ```bash
-# Получение примеров конфигурации MCP
-curl -X GET "http://localhost:8000/v1/mcp/examples" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ: примеры конфигураций для разных типов MCP серверов
-```
-
-#### 5.4 Получение документации MCP
-```bash
-# Получение документации по MCP
-curl -X GET "http://localhost:8000/v1/mcp/docs" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ: документация по использованию MCP
-```
-
-### 6. Управление кэшем - /v1/cache
-
-#### 6.1 Обновление кэша конкретного агента
-```bash
-# Обновление кэша агента
-curl -X POST "http://localhost:8000/v1/cache/refresh/agent/web_agent" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "Agent web_agent cache refreshed",
-#   "agent_id": "web_agent"
-# }
-```
-
-#### 6.2 Обновление кэша инструмента
-```bash
-# Обновление кэша инструмента
-curl -X POST "http://localhost:8000/v1/cache/refresh/tool/calculator_tool" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "Tool calculator_tool cache refreshed",
-#   "tool_id": "calculator_tool"
-# }
-```
-
-#### 6.3 Обновление кэша playground
-```bash
-# Обновление кэша playground
-curl -X POST "http://localhost:8000/v1/cache/refresh/playground" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "Playground cache refreshed"
-# }
-```
-
-#### 6.4 Полное обновление кэша
-```bash
-# Очистка и обновление всего кэша
-curl -X POST "http://localhost:8000/v1/cache/refresh/all" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "All cache cleared and refreshed"
-# }
-```
-
-#### 6.5 Статистика кэша
-```bash
-# Получение статистики кэша
+# Получить детальную статистику кэша
 curl -X GET "http://localhost:8000/v1/cache/stats" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ: детальная статистика использования кэша
+# Ожидаемый ответ: статистика cache_manager, auto_refresh и health
 ```
 
-#### 6.6 Очистка истекших элементов
+#### 6.2 Проверка здоровья кэша
 ```bash
-# Очистка истекших элементов кэша
-curl -X POST "http://localhost:8000/v1/cache/cleanup" \
-  -H "Content-Type: application/json"
-
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "Cleaned up 3 expired entries",
-#   "expired_count": 3
-# }
-```
-
-#### 6.7 Проверка здоровья кэша
-```bash
-# Проверка состояния системы кэширования
+# Проверить здоровье системы кэширования
 curl -X GET "http://localhost:8000/v1/cache/health" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ: информация о состоянии кэша
+# Ожидаемый ответ: состояние кэша и автообновления
 ```
 
-### 7. Playground управление - /v1/playground
-
-#### 7.1 Обновление playground
+#### 6.3 Ручное обновление кэша
 ```bash
-# Принудительное обновление playground
-curl -X POST "http://localhost:8000/v1/playground/refresh" \
+# Ручное обновление всего кэша
+curl -X POST "http://localhost:8000/v1/cache/refresh" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "Playground refreshed successfully",
-#   "agents_count": 8
-# }
+# Ожидаемый ответ: результат операции обновления
 ```
 
-#### 7.2 Обновление конкретного агента в playground
+#### 6.4 Обновление кэша конкретного агента
 ```bash
-# Обновление конкретного агента
-curl -X POST "http://localhost:8000/v1/playground/refresh/agent/web_agent" \
+# Обновить кэш конкретного агента
+curl -X POST "http://localhost:8000/v1/cache/refresh/agent/web_agent" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ:
-# {
-#   "status": "success",
-#   "message": "Agent web_agent refreshed in playground",
-#   "agent_id": "web_agent"
-# }
+# Ожидаемый ответ: результат обновления кэша агента
 ```
 
-#### 7.3 Статистика playground
+#### 6.5 Очистка истекших элементов кэша
 ```bash
-# Получение статистики playground
-curl -X GET "http://localhost:8000/v1/playground/stats" \
+# Очистить истекшие элементы кэша
+curl -X POST "http://localhost:8000/v1/cache/cleanup" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ: статистика агентов в playground
+# Ожидаемый ответ: количество очищенных элементов
 ```
 
-### 8. Agno Playground эндпоинты
-
-#### 8.1 Получение агентов для playground
+#### 6.6 Демонстрация автообновления кэша
 ```bash
-# Получение списка агентов в формате Agno Playground
-curl -X GET "http://localhost:8000/agents" \
+# Получить информацию о системе автообновления
+curl -X GET "http://localhost:8000/v1/cache/demo" \
   -H "Content-Type: application/json"
 
-# Ожидаемый ответ: агенты в формате, совместимом с Agno Playground
+# Ожидаемый ответ: описание функций автообновления
 ```
 
-#### 8.2 Запуск агента через playground
+## Тестирование автообновления кэша
+
+### Сценарий 1: Создание динамического агента
 ```bash
-# Запуск агента через интерфейс playground
-curl -X POST "http://localhost:8000/agents/web_agent/run" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "Какая погода сегодня?",
-    "stream": false
-  }'
+# 1. Получить текущий список агентов
+curl -X GET "http://localhost:8000/v1/agents" | jq '.[] | .agent_id'
 
-# Ожидаемый ответ: ответ агента в формате Agno
-```
-
-## Сценарии интеграционного тестирования
-
-### Сценарий 1: Полный жизненный цикл динамического агента
-```bash
-# 1. Создание агента
-AGENT_ID="integration_test_agent"
+# 2. Создать нового динамического агента
 curl -X POST "http://localhost:8000/v1/dynamic-agents" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"Интеграционный Тест Агент\",
-    \"agent_id\": \"$AGENT_ID\",
-    \"description\": \"Агент для интеграционного тестирования\",
-    \"instructions\": \"Ты помощник для интеграционного тестирования.\",
-    \"model_config\": {
-      \"provider\": \"openai\",
-      \"model\": \"gpt-4.1\"
-    }
-  }"
-
-# 2. Проверка создания
-curl -X GET "http://localhost:8000/v1/dynamic-agents/$AGENT_ID"
-
-# 3. Активация
-curl -X POST "http://localhost:8000/v1/dynamic-agents/$AGENT_ID/activate"
-
-# 4. Обновление кэша
-curl -X POST "http://localhost:8000/v1/dynamic-agents/refresh-cache"
-
-# 5. Тестирование работы через статический API
-curl -X POST "http://localhost:8000/v1/agents/$AGENT_ID/runs" \
-  -H "Content-Type: application/json" \
   -d '{
-    "message": "Привет! Ты работаешь?",
-    "stream": false
+    "name": "Cache Test Agent",
+    "agent_id": "cache_test_agent",
+    "description": "Агент для тестирования кэша",
+    "instructions": "Ты тестовый агент для проверки кэширования.",
+    "model_id": "gpt-4.1"
   }'
 
-# 6. Удаление
-curl -X DELETE "http://localhost:8000/v1/dynamic-agents/$AGENT_ID"
+# 3. СРАЗУ проверить что агент появился в списке (кэш обновился автоматически)
+curl -X GET "http://localhost:8000/v1/agents" | grep "cache_test_agent"
+
+# 4. Проверить статистику кэша
+curl -X GET "http://localhost:8000/v1/cache/stats"
 ```
 
-### Сценарий 2: Тестирование системы кэширования
+### Сценарий 2: Обновление динамического агента
 ```bash
-# 1. Получение статистики до операций
-curl -X GET "http://localhost:8000/v1/cache/stats"
+# 1. Обновить агента
+curl -X PUT "http://localhost:8000/v1/dynamic-agents/cache_test_agent" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Cache Test Agent",
+    "agent_id": "cache_test_agent",
+    "description": "Обновленный агент для тестирования кэша",
+    "instructions": "Ты обновленный тестовый агент.",
+    "model_id": "gpt-4.1"
+  }'
 
-# 2. Запуск нескольких агентов для заполнения кэша
-curl -X POST "http://localhost:8000/v1/agents/web_agent/runs" \
-  -d '{"message": "Тест 1", "stream": false}'
+# 2. СРАЗУ проверить что изменения отражены в списке
+curl -X GET "http://localhost:8000/v1/agents" | grep -A5 -B5 "cache_test_agent"
 
-curl -X POST "http://localhost:8000/v1/agents/finance_agent/runs" \
-  -d '{"message": "Тест 2", "stream": false}'
-
-# 3. Проверка изменения статистики
-curl -X GET "http://localhost:8000/v1/cache/stats"
-
-# 4. Очистка кэша
-curl -X POST "http://localhost:8000/v1/cache/refresh/all"
-
-# 5. Проверка очистки
-curl -X GET "http://localhost:8000/v1/cache/stats"
+# 3. Запустить агента чтобы убедиться что он работает с новой конфигурацией
+curl -X POST "http://localhost:8000/v1/agents/cache_test_agent/runs" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Привет! Проверяем обновленного агента.",
+    "stream": false
+  }'
 ```
 
-### Сценарий 3: Тестирование производительности
+### Сценарий 3: Создание и использование динамического инструмента
 ```bash
-# Создание нескольких агентов параллельно
-for i in {1..5}; do
-  curl -X POST "http://localhost:8000/v1/dynamic-agents" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"name\": \"Perf Test Agent $i\",
-      \"agent_id\": \"perf_test_$i\",
-      \"model_config\": {\"provider\": \"openai\", \"model\": \"gpt-4.1\"}
-    }" &
-done
-wait
+# 1. Создать инструмент
+curl -X POST "http://localhost:8000/v1/dynamic-tools/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Text Processor",
+    "tool_id": "text_processor",
+    "description": "Обрабатывает текст",
+    "function_name": "process_text",
+    "parameters_schema": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string", "description": "Текст для обработки"}
+      },
+      "required": ["text"]
+    },
+    "implementation": "def process_text(text: str) -> str:\n    return text.upper()"
+  }'
 
-# Проверка создания всех агентов
-curl -X GET "http://localhost:8000/v1/dynamic-agents" | jq '.[] | select(.name | contains("Perf Test"))'
+# 2. Создать агента с этим инструментом
+curl -X POST "http://localhost:8000/v1/dynamic-agents" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Agent with Tool",
+    "agent_id": "agent_with_tool",
+    "description": "Агент с пользовательским инструментом",
+    "instructions": "Используй инструмент text_processor для обработки текста.",
+    "model_id": "gpt-4.1",
+    "tools_config": [
+      {
+        "type": "dynamic",
+        "tool_id": "text_processor"
+      }
+    ]
+  }'
 
-# Очистка тестовых агентов
-for i in {1..5}; do
-  curl -X DELETE "http://localhost:8000/v1/dynamic-agents/perf_test_$i" &
-done
-wait
+# 3. Протестировать агента с инструментом
+curl -X POST "http://localhost:8000/v1/agents/agent_with_tool/runs" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Обработай текст: hello world",
+    "stream": false
+  }'
 ```
 
-## Ожидаемые результаты и валидация
+## Критерии успешности тестов
 
-### Критерии успешного тестирования:
-1. **Все health check эндпоинты** возвращают статус "success"
-2. **Статические агенты** успешно обрабатывают запросы
-3. **Динамические агенты** создаются, обновляются и удаляются корректно
-4. **Система кэширования** показывает корректную статистику
-5. **MCP интеграция** определяет доступность протокола
-6. **Playground** корректно загружает агентов
+### 1. Основная функциональность
+- ✅ Все эндпоинты отвечают корректно
+- ✅ Статические агенты работают из коробки
+- ✅ Динамические агенты создаются и выполняются
+- ✅ Мультимедиа файлы обрабатываются
+- ✅ Сессии сохраняются и восстанавливаются
 
-### Мониторинг производительности:
-- Время отклика < 2 секунд для простых запросов
-- Время отклика < 30 секунд для сложных запросов с инструментами
-- Потребление памяти стабильно
-- Отсутствие утечек соединений к БД
+### 2. Автообновление кэша
+- ✅ Создание агента → агент сразу доступен в /v1/agents
+- ✅ Обновление агента → изменения сразу видны
+- ✅ Создание инструмента → инструмент сразу доступен
+- ✅ Статистика кэша обновляется в реальном времени
 
-### Обработка ошибок:
-- Корректные HTTP статус коды
-- Информативные сообщения об ошибках
-- Graceful degradation при недоступности внешних сервисов
+### 3. Производительность
+- ✅ Ответы агентов приходят в разумное время (<30 сек)
+- ✅ Кэш показывает высокий hit rate после прогрева
+- ✅ Потоковые ответы работают корректно
+
+### 4. Безопасность и валидация
+- ✅ Некорректные данные отклоняются с понятными ошибками
+- ✅ Код инструментов валидируется перед сохранением
+- ✅ MCP инструменты работают в изолированной среде
+
+### 5. Интеграция с Agno
+- ✅ Статические агенты используют стандартные Agno компоненты
+- ✅ Динамические агенты совместимы с Agno API
+- ✅ Патчи применяются корректно при запуске
+
+## Возможные проблемы и решения
+
+### 1. Проблемы с базой данных
+- **Симптом**: Ошибки 500 при работе с динамическими агентами
+- **Решение**: Проверить подключение к PostgreSQL и выполнить миграции
+
+### 2. Проблемы с кэшированием
+- **Симптом**: Созданные агенты не появляются в списке
+- **Решение**: Проверить работу auto_cache и event_bus
+
+### 3. Проблемы с MCP
+- **Симптом**: MCP инструменты недоступны
+- **Решение**: Установить пакет mcp или отключить MCP функциональность
+
+### 4. Проблемы с мультимедиа
+- **Симптом**: Файлы не обрабатываются
+- **Решение**: Проверить поддержку ffmpeg и OpenAI Whisper
+
+### 5. Медленные ответы агентов
+- **Симптом**: Агенты отвечают дольше 30 секунд
+- **Решение**: Проверить настройки OpenAI API и модели
 
 ## Заключение
 
-Данный тест-план покрывает все основные функциональности Agent API Platform:
-- Полный CRUD для динамических агентов и инструментов
-- Интеграцию со статическими агентами Agno
-- Систему кэширования и оптимизации производительности
-- MCP протокол для расширения функциональности
-- Совместимость с Agno Playground
+Данный тест-план покрывает все основные компоненты Agent API Platform:
+- Статические и динамические агенты
+- Систему кэширования с автообновлением
+- Динамические инструменты
+- MCP интеграцию
+- Мультимедиа обработку
 
-Платформа демонстрирует гибкую архитектуру, позволяющую работать как со статическими, так и с динамическими компонентами, обеспечивая при этом высокую производительность через систему кэширования и изоляцию от базового фреймворка Agno. 
+Особое внимание уделяется тестированию автоматического обновления кэша, что является ключевой особенностью платформы. 

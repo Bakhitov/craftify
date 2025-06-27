@@ -289,6 +289,160 @@ class AgentRegistry:
                 "editable": False
             }
 
+    def get_static_agent_details(self, agent_id: str) -> Dict[str, any]:
+        """
+        Получает детальную информацию о статическом агенте с кэшированием.
+        
+        Args:
+            agent_id: ID статического агента
+            
+        Returns:
+            Словарь с полной информацией о статическом агенте
+        """
+        if not self.is_static_agent(agent_id):
+            raise ValueError(f"Agent {agent_id} is not a static agent")
+        
+        # Импорт кэш менеджера
+        from agents.cache import cache_manager
+        
+        # Проверяем кэш сначала
+        cache_key = f"static_agent_details:{agent_id}"
+        cached_details = cache_manager.get(cache_key)
+        if cached_details:
+            return cached_details
+        
+        try:
+            # Создаем экземпляр агента для извлечения конфигурации
+            agent = self._create_static_agent(agent_id, debug_mode=False)
+            if not agent:
+                raise ValueError(f"Failed to create static agent {agent_id}")
+            
+            # Извлекаем основную информацию
+            details = {
+                "agent_id": agent_id,
+                "name": getattr(agent, 'name', agent_id),
+                "description": getattr(agent, 'description', None),
+                "instructions": getattr(agent, 'instructions', None),
+                "model_id": getattr(agent.model, 'id', 'gpt-4.1') if hasattr(agent, 'model') else 'gpt-4.1',
+                "agent_type": "static",
+                "editable": False,
+                "is_active": True,
+                "source_file": f"agents/static/{agent_id}.py"
+            }
+            
+            # Извлекаем конфигурацию модели
+            model_config = {
+                "type": "openai",
+                "id": details["model_id"],
+                "temperature": 0.7,
+                "max_tokens": None,
+                "top_p": None,
+                "frequency_penalty": None,
+                "presence_penalty": None
+            }
+            
+            # Пытаемся извлечь параметры модели если они есть
+            if hasattr(agent, 'model') and agent.model:
+                if hasattr(agent.model, 'temperature'):
+                    model_config["temperature"] = agent.model.temperature
+                if hasattr(agent.model, 'max_tokens'):
+                    model_config["max_tokens"] = agent.model.max_tokens
+                if hasattr(agent.model, 'top_p'):
+                    model_config["top_p"] = agent.model.top_p
+            
+            details["model_config"] = model_config
+            
+            # Извлекаем конфигурацию инструментов
+            tools_config = []
+            if hasattr(agent, 'tools') and agent.tools:
+                for tool in agent.tools:
+                    tool_class_name = tool.__class__.__name__
+                    tool_module = tool.__class__.__module__
+                    tools_config.append({
+                        "type": "static",
+                        "import_path": f"{tool_module}.{tool_class_name}",
+                        "init_params": {}
+                    })
+            
+            details["tools_config"] = tools_config
+            
+            # Конфигурация знаний
+            knowledge_config = {
+                "enabled": bool(hasattr(agent, 'knowledge') and agent.knowledge),
+                "type": "url",
+                "sources": [],
+                "table_name": "knowledge",
+                "db_schema": "public",
+                "search_type": "hybrid",
+                "embedder_model": "text-embedding-3-small"
+            }
+            
+            if hasattr(agent, 'knowledge') and agent.knowledge:
+                # Пытаемся извлечь больше информации о знаниях
+                if hasattr(agent.knowledge, 'urls'):
+                    knowledge_config["sources"] = getattr(agent.knowledge, 'urls', [])
+            
+            details["knowledge_config"] = knowledge_config
+            
+            # Конфигурация памяти
+            memory_config = {
+                "enabled": bool(hasattr(agent, 'memory') and agent.memory),
+                "type": "postgres",
+                "memory_model_config": None,
+                "table_name": "user_memories",
+                "db_schema": "public",
+                "delete_memories": True,
+                "clear_memories": True
+            }
+            
+            details["memory_config"] = memory_config
+            
+            # Конфигурация хранилища
+            storage_config = {
+                "enabled": bool(hasattr(agent, 'storage') and agent.storage),
+                "type": "postgres",
+                "table_name": "sessions",
+                "db_schema": "public",
+                "db_url": None
+            }
+            
+            details["storage_config"] = storage_config
+            
+            # Настройки агента
+            settings = {
+                "name": getattr(agent, 'name', None),
+                "introduction": None,
+                "user_id": getattr(agent, 'user_id', None),
+                "session_name": None,
+                "session_state": None,
+                "search_previous_sessions_history": False,
+                "num_history_sessions": None,
+                "context": None,
+                "add_context": False,
+                "resolve_context": True,
+                "enable_agentic_memory": bool(hasattr(agent, 'memory') and agent.memory),
+                "enable_user_memories": False,
+                "add_memory_references": None,
+                "enable_session_summaries": False,
+                "add_session_summary_references": None,
+                "add_history_to_messages": getattr(agent, 'add_history_to_messages', False),
+                "debug_mode": getattr(agent, 'debug_mode', False),
+                "monitoring": getattr(agent, 'monitoring', False),
+                "output_model": None,
+                "stream": False
+            }
+            
+            details["settings"] = settings
+            
+            # Кэшируем результат на 30 минут (статические агенты редко меняются)
+            cache_manager.set(cache_key, details, ttl=1800)
+            
+            return details
+            
+        except Exception as e:
+            print(f"Ошибка при получении деталей статического агента {agent_id}: {e}")
+            raise e
+
 
 # Глобальный экземпляр реестра
 agent_registry = AgentRegistry() 

@@ -2,12 +2,19 @@ import warnings
 # Игнорируем предупреждение pydub о ffmpeg - мы используем OpenAI Whisper для аудио
 warnings.filterwarnings("ignore", message="Couldn't find ffmpeg or avconv")
 
+import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from starlette.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from logging import getLogger
 
 from api.routes.v1_router import v1_router
 from api.settings import api_settings
+from agents.patches import apply_agno_patches
+
+# Применяем патчи для Agno при запуске
+apply_agno_patches()
 
 logger = getLogger(__name__)
 

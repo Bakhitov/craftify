@@ -56,7 +56,12 @@ class DynamicAgentRequest(BaseModel):
     # Дополнительные настройки
     max_tokens: Optional[int] = Field(default=None, description="Максимальное количество токенов")
     temperature: Optional[float] = Field(default=None, description="Температура модели")
+    
+    # Конфигурации (опциональные в запросе, будут заполнены дефолтами если не переданы)
+    knowledge_config: Optional[dict] = Field(default_factory=dict, description="Конфигурация знаний")
+    memory_config: Optional[dict] = Field(default_factory=dict, description="Конфигурация памяти")
     storage_config: Optional[dict] = Field(default_factory=dict, description="Конфигурация хранилища")
+    settings: Optional[dict] = Field(default_factory=dict, description="Настройки агента")
 
     @validator('tools_config')
     def validate_tools_config_field(cls, v):
@@ -68,6 +73,35 @@ class DynamicAgentRequest(BaseModel):
         if v and isinstance(v[0], dict):
             return validate_tools_config(v)
         return v
+    
+    def get_model_config(self) -> ModelConfig:
+        """Создает ModelConfig из полей запроса"""
+        model_data = {
+            "id": self.model_id,
+            "type": "openai",  # Дефолтный тип
+        }
+        if self.max_tokens is not None:
+            model_data["max_tokens"] = self.max_tokens
+        if self.temperature is not None:
+            model_data["temperature"] = self.temperature
+        
+        return ModelConfig(**model_data)
+    
+    def get_knowledge_config(self) -> KnowledgeConfig:
+        """Создает KnowledgeConfig из полей запроса"""
+        return KnowledgeConfig(**(self.knowledge_config or {}))
+    
+    def get_memory_config(self) -> MemoryConfig:
+        """Создает MemoryConfig из полей запроса"""
+        return MemoryConfig(**(self.memory_config or {}))
+    
+    def get_storage_config(self) -> StorageConfig:
+        """Создает StorageConfig из полей запроса"""
+        return StorageConfig(**(self.storage_config or {}))
+    
+    def get_agent_settings(self) -> AgentSettings:
+        """Создает AgentSettings из полей запроса"""
+        return AgentSettings(**(self.settings or {}))
 
 
 class DynamicAgentResponse(BaseModel):
@@ -120,13 +154,15 @@ async def list_dynamic_agents():
             
             for row in result.fetchall():
                 # Данные в БД уже в формате dict/list, не JSON строки
+                model_config = ModelConfig(**(row.model_config if row.model_config else {}))
                 agents.append(DynamicAgentResponse(
                     id=row.id,
                     name=row.name,
                     agent_id=row.agent_id,
                     description=row.description,
                     instructions=row.instructions,
-                    model_config_data=ModelConfig(**(row.model_config if row.model_config else {})),
+                    model_id=model_config.id,  # Извлекаем model_id из model_config
+                    model_config_data=model_config,
                     tools_config=row.tools_config if row.tools_config else [],
                     knowledge_config=KnowledgeConfig(**(row.knowledge_config if row.knowledge_config else {})),
                     memory_config=MemoryConfig(**(row.memory_config if row.memory_config else {})),
@@ -178,13 +214,15 @@ async def get_dynamic_agent(agent_id: str):
                     detail=f"Динамический агент {agent_id} не найден"
                 )
             
+            model_config = ModelConfig(**(row.model_config if row.model_config else {}))
             response = DynamicAgentResponse(
                 id=row.id,
                 name=row.name,
                 agent_id=row.agent_id,
                 description=row.description,
                 instructions=row.instructions,
-                model_config_data=ModelConfig(**(row.model_config if row.model_config else {})),
+                model_id=model_config.id,  # Извлекаем model_id из model_config
+                model_config_data=model_config,
                 tools_config=row.tools_config if row.tools_config else [],
                 knowledge_config=KnowledgeConfig(**(row.knowledge_config if row.knowledge_config else {})),
                 memory_config=MemoryConfig(**(row.memory_config if row.memory_config else {})),
@@ -241,17 +279,24 @@ async def create_dynamic_agent(agent_data: DynamicAgentRequest):
                 ) RETURNING id, created_at, updated_at
             """)
             
+            # Создаем типизированные конфигурации
+            model_config = agent_data.get_model_config()
+            knowledge_config = agent_data.get_knowledge_config()
+            memory_config = agent_data.get_memory_config()
+            storage_config = agent_data.get_storage_config()
+            settings = agent_data.get_agent_settings()
+            
             result = session.execute(insert_query, {
                 "name": agent_data.name,
                 "agent_id": agent_data.agent_id,
                 "description": agent_data.description,
                 "instructions": agent_data.instructions,
-                "model_config": agent_data.model_config_data.model_dump(),
-                "tools_config": agent_data.tools_config,
-                "knowledge_config": agent_data.knowledge_config.model_dump(),
-                "memory_config": agent_data.memory_config.model_dump(),
-                "storage_config": agent_data.storage_config.model_dump(),
-                "settings": agent_data.settings.model_dump(),
+                "model_config": json.dumps(model_config.model_dump()),
+                "tools_config": json.dumps([tool.model_dump() if hasattr(tool, 'model_dump') else tool for tool in agent_data.tools_config]),
+                "knowledge_config": json.dumps(knowledge_config.model_dump()),
+                "memory_config": json.dumps(memory_config.model_dump()),
+                "storage_config": json.dumps(storage_config.model_dump()),
+                "settings": json.dumps(settings.model_dump()),
                 "is_active": True
             })
             
@@ -270,12 +315,13 @@ async def create_dynamic_agent(agent_data: DynamicAgentRequest):
                 agent_id=agent_data.agent_id,
                 description=agent_data.description,
                 instructions=agent_data.instructions,
-                model_config_data=agent_data.model_config_data,
+                model_id=model_config.id,
+                model_config_data=model_config,
                 tools_config=agent_data.tools_config,
-                knowledge_config=agent_data.knowledge_config,
-                memory_config=agent_data.memory_config,
-                storage_config=agent_data.storage_config,
-                settings=agent_data.settings,
+                knowledge_config=knowledge_config,
+                memory_config=memory_config,
+                storage_config=storage_config,
+                settings=settings,
                 is_active=True,
                 created_at=row.created_at,
                 updated_at=row.updated_at
@@ -335,17 +381,24 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
                 RETURNING id, created_at, updated_at
             """)
             
+            # Создаем типизированные конфигурации
+            model_config = agent_data.get_model_config()
+            knowledge_config = agent_data.get_knowledge_config()
+            memory_config = agent_data.get_memory_config()
+            storage_config = agent_data.get_storage_config()
+            settings = agent_data.get_agent_settings()
+            
             result = session.execute(update_query, {
                 "agent_id": agent_id,
                 "name": agent_data.name,
                 "description": agent_data.description,
                 "instructions": agent_data.instructions,
-                "model_config": agent_data.model_config_data.model_dump(),
-                "tools_config": agent_data.tools_config,
-                "knowledge_config": agent_data.knowledge_config.model_dump(),
-                "memory_config": agent_data.memory_config.model_dump(),
-                "storage_config": agent_data.storage_config.model_dump(),
-                "settings": agent_data.settings.model_dump()
+                "model_config": json.dumps(model_config.model_dump()),
+                "tools_config": json.dumps([tool.model_dump() if hasattr(tool, 'model_dump') else tool for tool in agent_data.tools_config]),
+                "knowledge_config": json.dumps(knowledge_config.model_dump()),
+                "memory_config": json.dumps(memory_config.model_dump()),
+                "storage_config": json.dumps(storage_config.model_dump()),
+                "settings": json.dumps(settings.model_dump())
             })
             
             row = result.fetchone()
@@ -363,12 +416,13 @@ async def update_dynamic_agent(agent_id: str, agent_data: DynamicAgentRequest):
                 agent_id=agent_id,
                 description=agent_data.description,
                 instructions=agent_data.instructions,
-                model_config_data=agent_data.model_config_data,
+                model_id=model_config.id,
+                model_config_data=model_config,
                 tools_config=agent_data.tools_config,
-                knowledge_config=agent_data.knowledge_config,
-                memory_config=agent_data.memory_config,
-                storage_config=agent_data.storage_config,
-                settings=agent_data.settings,
+                knowledge_config=knowledge_config,
+                memory_config=memory_config,
+                storage_config=storage_config,
+                settings=settings,
                 is_active=True,
                 created_at=row.created_at,
                 updated_at=row.updated_at

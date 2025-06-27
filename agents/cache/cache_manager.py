@@ -1,191 +1,207 @@
 """
-Упрощенный менеджер кэша - быстрый и легковесный.
-Принципы: минимум кода, максимум производительности, простота понимания.
+Простой TTL-кэш для агентов.
+Принципы: простота, надежность, минимум кода.
 """
 import time
 from typing import Optional, Dict, Any, List
 from agno.agent import Agent
 
-from .simple_cache import SimpleCache
-from .event_bus import CacheEventBus, EventType as CacheEventType
 
-
-class CacheManager:
+class SimpleCacheManager:
     """
-    Упрощенный менеджер кэша для максимальной производительности.
-    - Простой fallback на agno при ошибках
-    - Минимум накладных расходов
-    - Быстрые операции
+    Простой TTL-кэш для агентов.
+    Без сложных событий - просто быстрый кэш с TTL.
     """
     
-    def __init__(self):
-        self.cache = SimpleCache()
-        self.event_bus = CacheEventBus()
-        self._setup_event_handlers()
+    def __init__(self, default_ttl: int = 600):
+        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.default_ttl = default_ttl
         self._stats = {
             "cache_hits": 0,
             "cache_misses": 0,
-            "refreshes": 0,
-            "errors": 0
+            "cache_sets": 0,
+            "cache_deletes": 0,
+            "cleanup_runs": 0
         }
     
-    def _setup_event_handlers(self):
-        """Настройка обработчиков событий кэша"""
-        def clear_agents(data: Dict[str, Any]):
-            # Очищаем кэш агентов при изменении
-            pattern = f"agent:*"
-            keys = self.cache.get_keys_by_pattern(pattern)
-            for key in keys:
-                self.cache.delete(key)
-            print(f"🧹 Очищен кэш агентов: {len(keys)} ключей")
-
-        def clear_tools(data: Dict[str, Any]):
-            # Очищаем кэш инструментов при изменении  
-            pattern = f"tool:*"
-            keys = self.cache.get_keys_by_pattern(pattern)
-            for key in keys:
-                self.cache.delete(key)
-            print(f"🧹 Очищен кэш инструментов: {len(keys)} ключей")
-
-        # Подписываемся на события
-        self.event_bus.on(CacheEventType.AGENT_UPDATED, clear_agents)
-        self.event_bus.on(CacheEventType.TOOL_UPDATED, clear_tools)
-    
-    # === ОСНОВНЫЕ МЕТОДЫ КЭША ===
-    
     def get_agent(self, agent_id: str, **kwargs) -> Optional[Agent]:
-        """Быстрое получение агента из кэша"""
+        """Получение агента из кэша"""
         try:
             cache_key = f"agent:{agent_id}"
-            agent = self.cache.get(cache_key)
             
-            if agent:
-                self._stats["cache_hits"] += 1
-                return agent
-            else:
-                self._stats["cache_misses"] += 1
-                return None  # Fallback на agno
+            if cache_key in self.cache:
+                entry = self.cache[cache_key]
+                
+                # Проверяем TTL
+                if time.time() < entry['expires_at']:
+                    self._stats["cache_hits"] += 1
+                    return entry['value']
+                else:
+                    # Истек TTL - удаляем
+                    del self.cache[cache_key]
+            
+            self._stats["cache_misses"] += 1
+            return None
                 
         except Exception:
-            self._stats["errors"] += 1
-            return None  # Fallback на agno
+            self._stats["cache_misses"] += 1
+            return None
     
-    def set_agent(self, agent_id: str, agent: Agent, ttl: int = 600) -> bool:
-        """Быстрое сохранение агента в кэш"""
+    def set_agent(self, agent_id: str, agent: Agent, ttl: Optional[int] = None) -> bool:
+        """Сохранение агента в кэш"""
         try:
             cache_key = f"agent:{agent_id}"
-            return self.cache.set(cache_key, agent, ttl=ttl)
+            expires_at = time.time() + (ttl or self.default_ttl)
+            
+            self.cache[cache_key] = {
+                'value': agent,
+                'expires_at': expires_at,
+                'created_at': time.time()
+            }
+            
+            self._stats["cache_sets"] += 1
+            return True
+            
         except Exception:
-            self._stats["errors"] += 1
             return False
     
     def get_agents_list(self) -> Optional[List[str]]:
         """Получение списка агентов из кэша"""
         try:
-            agents_list = self.cache.get("agents:list")
-            if agents_list:
-                self._stats["cache_hits"] += 1
-                return agents_list
-            else:
-                self._stats["cache_misses"] += 1
-                return None
+            return self.get("agents:list")
         except Exception:
-            self._stats["errors"] += 1
             return None
     
-    def set_agents_list(self, agents_list: List[str], ttl: int = 300) -> bool:
+    def set_agents_list(self, agents_list: List[str], ttl: Optional[int] = None) -> bool:
         """Сохранение списка агентов в кэш"""
         try:
-            return self.cache.set("agents:list", agents_list, ttl=ttl)
+            return self.set("agents:list", agents_list, ttl)
         except Exception:
-            self._stats["errors"] += 1
             return False
     
-    # === МЕТОДЫ ОБНОВЛЕНИЯ ===
-    
-    def refresh_agent(self, agent_id: str) -> bool:
-        """Обновление конкретного агента"""
+    def get(self, key: str) -> Optional[Any]:
+        """Универсальное получение из кэша"""
         try:
-            self.event_bus.emit(CacheEventType.AGENT_UPDATED, {
-                "agent_id": agent_id,
-                "timestamp": time.time()
-            })
-            return True
+            if key in self.cache:
+                entry = self.cache[key]
+                
+                if time.time() < entry['expires_at']:
+                    self._stats["cache_hits"] += 1
+                    return entry['value']
+                else:
+                    del self.cache[key]
+            
+            self._stats["cache_misses"] += 1
+            return None
+            
         except Exception:
-            self._stats["errors"] += 1
-            return False
+            self._stats["cache_misses"] += 1
+            return None
     
-    def refresh_tool(self, tool_id: str) -> bool:
-        """Обновление конкретного инструмента"""
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        """Универсальное сохранение в кэш"""
         try:
-            self.event_bus.emit(CacheEventType.TOOL_UPDATED, {
-                "tool_id": tool_id,
-                "timestamp": time.time()
-            })
+            expires_at = time.time() + (ttl or self.default_ttl)
+            
+            self.cache[key] = {
+                'value': value,
+                'expires_at': expires_at,
+                'created_at': time.time()
+            }
+            
+            self._stats["cache_sets"] += 1
             return True
+            
         except Exception:
-            self._stats["errors"] += 1
             return False
     
-    def refresh_all(self) -> bool:
+    def delete(self, key: str) -> bool:
+        """Удаление из кэша"""
+        try:
+            if key in self.cache:
+                del self.cache[key]
+                self._stats["cache_deletes"] += 1
+                return True
+            return False
+        except Exception:
+            return False
+    
+    def clear(self) -> bool:
         """Полная очистка кэша"""
         try:
-            self.event_bus.emit(CacheEventType.CACHE_CLEARED, {
-                "timestamp": time.time()
-            })
+            self.cache.clear()
             return True
         except Exception:
-            self._stats["errors"] += 1
             return False
-    
-    # === СЛУЖЕБНЫЕ МЕТОДЫ ===
     
     def cleanup(self) -> int:
         """Очистка истекших элементов"""
         try:
-            return self.cache.cleanup()
+            current_time = time.time()
+            expired_keys = [
+                key for key, entry in self.cache.items() 
+                if current_time >= entry['expires_at']
+            ]
+            
+            for key in expired_keys:
+                del self.cache[key]
+            
+            self._stats["cleanup_runs"] += 1
+            return len(expired_keys)
+            
         except Exception:
-            self._stats["errors"] += 1
             return 0
     
+    def refresh_agent(self, agent_id: str) -> bool:
+        """Обновление агента - просто удаляем из кэша"""
+        return self.delete(f"agent:{agent_id}")
+    
+    def refresh_all(self) -> bool:
+        """Полное обновление - очищаем весь кэш"""
+        return self.clear()
+    
     def stats(self) -> Dict[str, Any]:
-        """Быстрая статистика кэша"""
+        """Статистика кэша"""
         try:
-            cache_stats = self.cache.get_stats()
-            event_stats = self.event_bus.stats()
+            total_keys = len(self.cache)
+            current_time = time.time()
+            
+            active_keys = sum(
+                1 for entry in self.cache.values() 
+                if current_time < entry['expires_at']
+            )
+            expired_keys = total_keys - active_keys
+            
+            hit_rate = 0.0
+            total_requests = self._stats["cache_hits"] + self._stats["cache_misses"]
+            if total_requests > 0:
+                hit_rate = self._stats["cache_hits"] / total_requests
             
             return {
-                "cache": cache_stats,
-                "events": event_stats,
-                "operations": self._stats,
-                "cache_keys": {
-                    "total": cache_stats["total_keys"],
-                    "active": cache_stats["active_keys"],
-                    "expired": cache_stats["expired_keys"]
-                }
+                "total_keys": total_keys,
+                "active_keys": active_keys,
+                "expired_keys": expired_keys,
+                "hit_rate": round(hit_rate, 3),
+                "operations": self._stats.copy()
             }
         except Exception:
-            self._stats["errors"] += 1
             return {"error": "Failed to get stats"}
     
     def health_check(self) -> Dict[str, Any]:
-        """Быстрая проверка здоровья кэша"""
+        """Проверка здоровья кэша"""
         try:
-            cache_stats = self.cache.get_stats()
-            error_rate = self._stats["errors"] / max(1, sum(self._stats.values()))
+            stats = self.stats()
             
             is_healthy = (
-                cache_stats["total_keys"] < 10000 and  # Не переполнен
-                error_rate < 0.1 and  # Мало ошибок
-                self.event_bus.get_listener_count() > 0  # События работают
+                stats["total_keys"] < 10000 and  # Не переполнен
+                stats["hit_rate"] > 0.1  # Есть попадания
             )
             
             return {
                 "status": "healthy" if is_healthy else "degraded",
-                "cache_size": cache_stats["total_keys"],
-                "error_rate": round(error_rate, 3),
-                "event_listeners": self.event_bus.get_listener_count(),
-                "issues": [] if is_healthy else ["High cache size or error rate"]
+                "cache_size": stats["total_keys"],
+                "hit_rate": stats["hit_rate"],
+                "issues": [] if is_healthy else ["High cache size or low hit rate"]
             }
         except Exception:
             return {
@@ -194,5 +210,5 @@ class CacheManager:
             }
 
 
-# Глобальный экземпляр менеджера кэша
-cache_manager = CacheManager() 
+# Глобальный экземпляр кэш-менеджера
+cache_manager = SimpleCacheManager() 
