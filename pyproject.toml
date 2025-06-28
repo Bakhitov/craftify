@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [{ name = "Agno", email = "hello@agno.com" }]
 
 dependencies = [
-  "agno==1.6.3",
+  "agno==1.7.0",
   "alembic",
   "duckduckgo-search",
   "fastapi[standard]",
@@ -20,6 +20,8 @@ dependencies = [
   "httpx",
   "python-docx",
   "pypdf",
+  "python-pptx",
+  "openpyxl",
   "aiofiles",
   "mcp",
   "elevenlabs",

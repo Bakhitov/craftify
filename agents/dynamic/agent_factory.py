@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Union
 from sqlalchemy import text
 
 from agno.agent import Agent, AgentKnowledge
-from agno.models.openai import OpenAIChat
+from agno.models.openai import OpenAIResponses
 from agno.models.base import Model
 from agno.storage.agent.postgres import PostgresAgentStorage
 from agno.memory.v2.db.postgres import PostgresMemoryDb
@@ -59,7 +59,7 @@ class DynamicAgentFactory:
                 return None
             
             # Создаем основные компоненты
-            model = OpenAIChat(id=model_id)
+            model = OpenAIResponses(id=model_id)
             tools = DynamicAgentFactory._create_tools(agent_config.get('tools_config', []))
             
             # Базовые параметры агента
@@ -244,7 +244,7 @@ class DynamicAgentFactory:
                 return None
             
             return Memory(
-                model=OpenAIChat(id=model_id),
+                model=OpenAIResponses(id=model_id),
                 db=PostgresMemoryDb(
                     table_name=memory_config.get("table_name", "user_memories"),
                     schema=memory_config.get("db_schema", "public"), 
