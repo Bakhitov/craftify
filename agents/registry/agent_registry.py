@@ -4,7 +4,7 @@
 Использует изолированную архитектуру для совместимости с Agno.
 """
 import time
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Any
 from agno.agent import Agent
 
 # Импорты статических агентов
@@ -126,7 +126,9 @@ class AgentRegistry:
             print(f"Ошибка импорта статического агента {agent_id}: {e}")
             return None
         except Exception as e:
-            print(f"Ошибка создания статического агента {agent_id}: {e}")
+            from agents.exceptions import handle_agent_error
+            error = handle_agent_error("create", agent_id, e, {"type": "static"})
+            print(f"⚠️ {error}")
             return None
 
     def _create_dynamic_agent(
@@ -152,7 +154,9 @@ class AgentRegistry:
                 
             return agent
         except Exception as e:
-            print(f"Ошибка при создании динамического агента {agent_id}: {e}")
+            from agents.exceptions import handle_agent_error
+            error = handle_agent_error("create", agent_id, e, {"type": "dynamic"})
+            print(f"⚠️ {error}")
             return None
     
     def get_available_agents(self) -> List[str]:
@@ -442,6 +446,73 @@ class AgentRegistry:
         except Exception as e:
             print(f"Ошибка при получении деталей статического агента {agent_id}: {e}")
             raise e
+
+    def get_static_agent_basic_info(self, agent_id: str) -> Dict[str, Any]:
+        """
+        Быстрое получение базовой информации о статическом агенте без создания объекта Agent.
+        Оптимизация для list_agents() - избегаем N+1 проблему.
+        """
+        if not self.is_static_agent(agent_id):
+            return {}
+        
+        # Базовая информация из статической конфигурации
+        basic_info = {
+            "agent_id": agent_id,
+            "agent_type": "static",
+            "source_file": f"agents/static/{agent_id}.py",
+            "editable": False,
+            "is_active": True,
+            "created_at": None,
+            "updated_at": None
+        }
+        
+        # Добавляем специфичную информацию для каждого агента
+        if agent_id == "agno_assist":
+            basic_info.update({
+                "name": "Agno Assist",
+                "description": "Advanced AI Agent specializing in Agno framework development",
+                "model_id": "gpt-4.1",
+                "tools_config": [{"type": "static", "import_path": "agno.tools.duckduckgo.DuckDuckGoTools"}],
+                "knowledge_config": {"enabled": True, "type": "url", "sources": ["https://docs.agno.com/llms-full.txt"]},
+                "memory_config": {"enabled": True, "type": "postgres"},
+                "storage_config": {"enabled": True, "type": "postgres"}
+            })
+        elif agent_id == "finance_agent":
+            basic_info.update({
+                "name": "Finance Agent", 
+                "description": "Financial analysis and market data agent",
+                "model_id": "gpt-4.1",
+                "tools_config": [{"type": "static", "import_path": "agno.tools.yfinance.YFinanceTools"}],
+                "knowledge_config": {"enabled": False},
+                "memory_config": {"enabled": True, "type": "postgres"},
+                "storage_config": {"enabled": True, "type": "postgres"}
+            })
+        elif agent_id == "web_agent":
+            basic_info.update({
+                "name": "Web Agent",
+                "description": "Web browsing and search agent", 
+                "model_id": "gpt-4.1",
+                "tools_config": [
+                    {"type": "static", "import_path": "agno.tools.duckduckgo.DuckDuckGoTools"},
+                    {"type": "static", "import_path": "agno.tools.newspaper4k.Newspaper4kTools"}
+                ],
+                "knowledge_config": {"enabled": False},
+                "memory_config": {"enabled": True, "type": "postgres"},
+                "storage_config": {"enabled": True, "type": "postgres"}
+            })
+        else:
+            # Fallback для неизвестных агентов
+            basic_info.update({
+                "name": agent_id.replace('_', ' ').title(),
+                "description": f"Static agent: {agent_id}",
+                "model_id": "gpt-4.1",
+                "tools_config": [],
+                "knowledge_config": {"enabled": False},
+                "memory_config": {"enabled": False},
+                "storage_config": {"enabled": True, "type": "postgres"}
+            })
+        
+        return basic_info
 
 
 # Глобальный экземпляр реестра

@@ -161,11 +161,11 @@ async def create_dynamic_tool(tool_data: ToolRequest):
                     detail=f"Инструмент с ID '{tool_data.tool_id}' уже существует"
                 )
             
-            # Создаем новый инструмент
+            # Создаем новый инструмент (ID автоинкремент)
             insert_query = text("""
                 INSERT INTO dynamic_tools 
-                (name, tool_id, description, function_name, parameters_schema, implementation)
-                VALUES (:name, :tool_id, :description, :function_name, :parameters_schema, :implementation)
+                (name, tool_id, description, function_name, parameters_schema, implementation, is_active)
+                VALUES (:name, :tool_id, :description, :function_name, :parameters_schema, :implementation, true)
                 RETURNING id, created_at, updated_at
             """)
             

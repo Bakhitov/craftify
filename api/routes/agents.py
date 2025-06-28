@@ -6,7 +6,7 @@ from datetime import datetime
 from agno.agent import Agent, AgentKnowledge
 from agno.storage.session.agent import AgentSession
 from agno.media import File, Image, Audio, Video
-from fastapi import APIRouter, HTTPException, status, UploadFile, File as FastAPIFile, Form
+from fastapi import APIRouter, HTTPException, status, UploadFile, File as FastAPIFile, Form, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -100,39 +100,52 @@ async def list_agents():
         except Exception as db_error:
             logger.error(f"Database error while loading dynamic agents: {db_error}")
         
-        # 3. Добавляем статические агенты (используем кэшированные детали)
+        # 3. Добавляем статические агенты (ОПТИМИЗИРОВАНО: без создания Agent объектов)
         for agent_id in static_agent_ids:
             try:
-                agent_details = get_static_agent_details(agent_id)
-                static_agent = StaticAgentResponse(
-                    id=None,
-                    name=agent_details.get("name", agent_id),
-                    agent_id=agent_id,
-                    description=agent_details.get("description"),
-                    instructions=agent_details.get("instructions"),
-                    model_id=agent_details.get("model_id", "gpt-4.1"),
-                    model_config_data=agent_details.get("model_config", {}),
-                    tools_config=agent_details.get("tools_config", []),
-                    knowledge_config=agent_details.get("knowledge_config", {}),
-                    memory_config=agent_details.get("memory_config", {}),
-                    storage_config=agent_details.get("storage_config", {}),
-                    settings=agent_details.get("settings", {}),
-                    is_active=agent_details.get("is_active", True),
-                    max_tokens=agent_details.get("max_tokens"),
-                    temperature=agent_details.get("temperature"),
-                    created_at=None,
-                    updated_at=None,
-                    agent_type="static",
-                    source_file=agent_details.get("source_file"),
-                    editable=False
-                )
-                agents_info.append(static_agent.model_dump(by_alias=True))
+                # Быстрое получение базовой информации без создания Agent объекта
+                from agents.selector import get_static_agent_basic_info
+                basic_info = get_static_agent_basic_info(agent_id)
+                
+                if basic_info:
+                    static_agent = StaticAgentResponse(
+                        id=None,
+                        name=basic_info.get("name", agent_id),
+                        agent_id=agent_id,
+                        description=basic_info.get("description"),
+                        instructions=basic_info.get("instructions"),
+                        model_id=basic_info.get("model_id", "gpt-4.1"),
+                        model_config_data={"type": "openai", "id": basic_info.get("model_id", "gpt-4.1")},
+                        tools_config=basic_info.get("tools_config", []),
+                        knowledge_config=basic_info.get("knowledge_config", {}),
+                        memory_config=basic_info.get("memory_config", {}),
+                        storage_config=basic_info.get("storage_config", {}),
+                        settings={},  # Базовые настройки для списка
+                        is_active=basic_info.get("is_active", True),
+                        max_tokens=None,
+                        temperature=None,
+                        created_at=None,
+                        updated_at=None,
+                        agent_type="static",
+                        source_file=basic_info.get("source_file"),
+                        editable=False
+                    )
+                    agents_info.append(static_agent.model_dump(by_alias=True))
+                else:
+                    # Fallback если не удалось получить информацию
+                    agents_info.append({
+                        "agent_id": agent_id,
+                        "agent_type": "static",
+                        "name": agent_id.replace('_', ' ').title(),
+                        "is_active": True,
+                        "editable": False
+                    })
             except Exception as e:
-                logger.warning(f"Failed to get details for static agent {agent_id}: {e}")
-                # Добавляем базовую информацию при ошибке
+                logger.warning(f"Failed to get basic info for static agent {agent_id}: {e}")
+                # Добавляем минимальную информацию при ошибке
                 agents_info.append({
                     "agent_id": agent_id,
-                    "type": "static",
+                    "agent_type": "static",
                     "name": agent_id,
                     "error": str(e)
                 })
@@ -178,19 +191,29 @@ async def chat_response_streamer(
     Yields:
         Text chunks from the agent response
     """
-    run_response = await agent.arun(
-        message, 
-        stream=True,
-        files=files,
-        images=images,
-        audio=audio,
-        videos=videos
-    )
-    async for chunk in run_response:
-        # chunk.content only contains the text response from the Agent.
-        # For advanced use cases, we should yield the entire chunk
-        # that contains the tool calls and intermediate steps.
-        yield chunk.content
+    try:
+        run_response = await agent.arun(
+            message, 
+            stream=True,
+            files=files,
+            images=images,
+            audio=audio,
+            videos=videos
+        )
+        async for chunk in run_response:
+            # ИСПРАВЛЕНИЕ: Проверяем chunk.content на None перед yield
+            # Это предотвращает ошибку 'NoneType' object has no attribute 'encode'
+            if chunk and chunk.content is not None:
+                yield chunk.content
+            elif chunk and hasattr(chunk, 'delta') and chunk.delta:
+                # Fallback для других форматов chunk
+                yield str(chunk.delta)
+            else:
+                # Пропускаем пустые chunks без ошибок
+                continue
+    except Exception as e:
+        logger.error(f"Error in streaming response: {e}")
+        yield f"Ошибка при обработке запроса: {str(e)}"
 
 
 async def process_uploaded_files(
@@ -387,8 +410,7 @@ async def process_uploaded_files(
 
 
 class RunRequest(BaseModel):
-    """Request model for an running an agent"""
-
+    """Request model for running an agent"""
     message: str
     stream: bool = False
     model: Model = Model.gpt_4_1
@@ -396,136 +418,44 @@ class RunRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-@agents_router.post("/{agent_id}/runs", status_code=status.HTTP_200_OK)
-async def create_agent_run(agent_id: str, body: RunRequest):
-    """
-    Sends a message to a specific agent and returns the response.
-
-    Args:
-        agent_id: The ID of the agent to interact with
-        body: Request parameters including the message
-
-    Returns:
-        Either a streaming response or the complete agent response
-    """
-    logger.debug(f"RunRequest: {body}")
-
-    try:
-        agent: Agent = get_agent(
-            agent_id=agent_id,
-            model_id=body.model.value,
-            user_id=body.user_id,
-            session_id=body.session_id,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-
-    if body.stream:
-        return StreamingResponse(
-            chat_response_streamer(agent, body.message),
-            media_type="text/event-stream",
-        )
-    else:
-        response = await agent.arun(body.message, stream=False)
-        # Возвращаем полный RunResponse с поддержкой мультимедиа артефактов
-        # для максимальной совместимости с возможностями Agno агентов
-        return {
-            "content": response.content,
-            "content_type": response.content_type,
-            "images": [img.to_dict() for img in response.images] if response.images else None,
-            "videos": [vid.to_dict() for vid in response.videos] if response.videos else None, 
-            "audio": [aud.to_dict() for aud in response.audio] if response.audio else None,
-            "response_audio": response.response_audio.to_dict() if response.response_audio else None,
-            "citations": response.citations.model_dump() if response.citations else None,
-            "thinking": response.thinking,
-            "reasoning_content": response.reasoning_content,
-            "metrics": response.metrics,
-            "model": response.model,
-            "run_id": response.run_id,
-            "session_id": response.session_id,
-            "formatted_tool_calls": response.formatted_tool_calls
-        }
-
-
-@agents_router.post("/{agent_id}/runs/multipart", status_code=status.HTTP_200_OK)
-async def create_agent_run_with_files(
+async def _execute_agent_run(
     agent_id: str,
-    message: str = Form(..., description="Текстовое сообщение для агента"),
-    stream: bool = Form(False, description="Включить потоковый ответ"),
-    model: str = Form("gpt-4.1", description="Модель для использования"),
-    user_id: Optional[str] = Form(None, description="ID пользователя"),
-    session_id: Optional[str] = Form(None, description="ID сессии"),
-    files: Optional[List[UploadFile]] = FastAPIFile(None, description="Файлы для обработки (PDF, текст, код и др.)"),
-    images: Optional[List[UploadFile]] = FastAPIFile(None, description="Изображения для анализа"),
-    audio: Optional[List[UploadFile]] = FastAPIFile(None, description="Аудио файлы для обработки"),
-    videos: Optional[List[UploadFile]] = FastAPIFile(None, description="Видео файлы для анализа"),
+    message: str,
+    stream: bool = False,
+    model: str = "gpt-4.1",
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    files: Optional[List[UploadFile]] = None,
+    images: Optional[List[UploadFile]] = None,
+    audio: Optional[List[UploadFile]] = None,
+    videos: Optional[List[UploadFile]] = None,
 ):
-    """
-    Отправляет сообщение с файлами агенту и возвращает ответ.
-    Поддерживает multipart/form-data для загрузки мультимедиа контента.
-    
-    Мультимодальные возможности:
-    - 📄 Файлы: PDF, текст, код, документы, JSON, YAML
-    - 🖼️ Изображения: PNG, JPEG, WebP, GIF с высоким качеством анализа
-    - 🎵 Аудио: различные аудио форматы
-    - 🎬 Видео: MP4, MOV, AVI и другие
-    
-    Совместимость: Полная интеграция с Agno Agent.arun() API
-
-    Args:
-        agent_id: ID агента для взаимодействия
-        message: Текстовое сообщение 
-        stream: Включить потоковый ответ
-        model: Модель для использования (gpt-4.1, o4-mini)
-        user_id: ID пользователя для персонализации
-        session_id: ID сессии для контекста
-        files: Файлы документов, кода, текста
-        images: Изображения для визуального анализа
-        audio: Аудио файлы для анализа звука
-        videos: Видео файлы для анализа видеоконтента
-
-    Returns:
-        Ответ агента (потоковый или обычный) с обработкой медиа контента
-    """
-    # Валидация входных данных
+    """Общая логика выполнения запроса к агенту"""
+    # Валидация параметров
     if not message or not message.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message cannot be empty"
         )
 
-    # Подсчет общего количества файлов
-    total_files = 0
-    if files:
-        total_files += len(files)
-    if images:
-        total_files += len(images)
-    if audio:
-        total_files += len(audio)
-    if videos:
-        total_files += len(videos)
-
-    # Лимит файлов для предотвращения злоупотреблений
-    MAX_FILES = 20
-    if total_files > MAX_FILES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Too many files. Maximum allowed: {MAX_FILES}, provided: {total_files}"
-        )
-
-    logger.info(f"🚀 Agent run request: agent={agent_id}, message_len={len(message)}, "
-                f"files={len(files) if files else 0}, images={len(images) if images else 0}, "
-                f"audio={len(audio) if audio else 0}, videos={len(videos) if videos else 0}")
-
-    try:
-        # Валидация модели
-        SUPPORTED_MODELS = ["gpt-4.1", "o4-mini"]
-        if model not in SUPPORTED_MODELS:
+    # Подсчет файлов и валидация лимитов
+    has_files = any([files, images, audio, videos])
+    if has_files:
+        total_files = sum([
+            len(files) if files else 0,
+            len(images) if images else 0,
+            len(audio) if audio else 0,
+            len(videos) if videos else 0
+        ])
+        
+        MAX_FILES = 20
+        if total_files > MAX_FILES:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, 
-                detail=f"Unsupported model: {model}. Supported: {SUPPORTED_MODELS}"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Too many files. Maximum: {MAX_FILES}, provided: {total_files}"
             )
 
+    try:
         # Получаем агента
         agent: Agent = get_agent(
             agent_id=agent_id,
@@ -537,62 +467,51 @@ async def create_agent_run_with_files(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     try:
-        # Обрабатываем загруженные файлы с максимальной совместимостью с Agno
-        processed_files, processed_images, processed_audio, processed_videos, text_content_summary = await process_uploaded_files(
-            files=files,
-            images=images, 
-            audio=audio,
-            videos=videos
-        )
-
-        # Логируем успешную обработку медиа контента
-        media_summary = []
-        if processed_files:
-            media_summary.append(f"📄 {len(processed_files)} files")
-        if processed_images:
-            media_summary.append(f"🖼️ {len(processed_images)} images")
-        if processed_audio:
-            media_summary.append(f"🎵 {len(processed_audio)} audio")
-        if processed_videos:
-            media_summary.append(f"🎬 {len(processed_videos)} videos")
-        
-        if media_summary:
-            logger.info(f"✅ Processed media for agent {agent_id}: {', '.join(media_summary)}")
-
-        # Если есть текстовое содержимое файлов, добавляем его к сообщению
+        # Обрабатываем файлы если они есть
+        processed_files = processed_images = processed_audio = processed_videos = None
         enhanced_message = message
-        if text_content_summary:
-            enhanced_message = f"{message}\n\n📁 **Содержимое загруженных файлов:**\n{text_content_summary}"
+        
+        if has_files:
+            processed_files, processed_images, processed_audio, processed_videos, text_summary = await process_uploaded_files(
+                files=files, images=images, audio=audio, videos=videos
+            )
+            
+            # Добавляем содержимое текстовых файлов к сообщению
+            if text_summary:
+                enhanced_message = f"{message}\n\n📁 **Содержимое файлов:**\n{text_summary}"
+            
+            # Логируем обработанные файлы
+            media_parts = []
+            if processed_files: media_parts.append(f"📄{len(processed_files)}")
+            if processed_images: media_parts.append(f"🖼️{len(processed_images)}")
+            if processed_audio: media_parts.append(f"🎵{len(processed_audio)}")
+            if processed_videos: media_parts.append(f"🎬{len(processed_videos)}")
+            
+            logger.info(f"✅ Processed media: {', '.join(media_parts)}")
 
-        # Запускаем агента с полным мультимодальным контентом
+        # Запускаем агента
         if stream:
             return StreamingResponse(
                 chat_response_streamer(
-                    agent, 
-                    enhanced_message, 
-                    files=processed_files,
-                    images=processed_images,
-                    audio=processed_audio,
-                    videos=processed_videos
+                    agent, enhanced_message, 
+                    files=processed_files, images=processed_images,
+                    audio=processed_audio, videos=processed_videos
                 ),
                 media_type="text/event-stream",
             )
         else:
             response = await agent.arun(
-                enhanced_message, 
-                stream=False,
-                files=processed_files,
-                images=processed_images,
-                audio=processed_audio,
-                videos=processed_videos
+                enhanced_message, stream=False,
+                files=processed_files, images=processed_images,
+                audio=processed_audio, videos=processed_videos
             )
-            # Возвращаем полный RunResponse с поддержкой мультимедиа артефактов
-            # вместо только текстового содержимого для максимальной функциональности
+            
+            # Возвращаем полный RunResponse
             return {
                 "content": response.content,
                 "content_type": response.content_type,
                 "images": [img.to_dict() for img in response.images] if response.images else None,
-                "videos": [vid.to_dict() for vid in response.videos] if response.videos else None, 
+                "videos": [vid.to_dict() for vid in response.videos] if response.videos else None,
                 "audio": [aud.to_dict() for aud in response.audio] if response.audio else None,
                 "response_audio": response.response_audio.to_dict() if response.response_audio else None,
                 "citations": response.citations.model_dump() if response.citations else None,
@@ -605,15 +524,65 @@ async def create_agent_run_with_files(
                 "formatted_tool_calls": response.formatted_tool_calls
             }
 
-    except HTTPException:
-        # Пробрасываем HTTP исключения как есть
-        raise
     except Exception as e:
-        logger.error(f"❌ Error in multimodal agent run for {agent_id}: {e}")
+        logger.error(f"Error running agent {agent_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process multimodal request: {str(e)}"
+            detail=f"Agent execution failed: {str(e)}"
         )
+
+
+@agents_router.post("/{agent_id}/runs", status_code=status.HTTP_200_OK)
+async def create_agent_run_json(agent_id: str, body: RunRequest):
+    """
+    JSON эндпоинт для запуска агентов без файлов.
+    Content-Type: application/json
+    """
+    logger.debug(f"JSON RunRequest: {body}")
+    
+    return await _execute_agent_run(
+        agent_id=agent_id,
+        message=body.message,
+        stream=body.stream,
+        model=body.model.value,
+        user_id=body.user_id,
+        session_id=body.session_id
+    )
+
+
+@agents_router.post("/{agent_id}/runs/multipart", status_code=status.HTTP_200_OK)
+async def create_agent_run_multipart(
+    agent_id: str,
+    message: str = Form(..., description="Текстовое сообщение для агента"),
+    stream: bool = Form(False, description="Включить потоковый ответ"),
+    model: str = Form("gpt-4.1", description="Модель для использования"),
+    user_id: Optional[str] = Form(None, description="ID пользователя"),
+    session_id: Optional[str] = Form(None, description="ID сессии"),
+    files: Optional[List[UploadFile]] = FastAPIFile(None, description="Файлы для обработки"),
+    images: Optional[List[UploadFile]] = FastAPIFile(None, description="Изображения для анализа"),
+    audio: Optional[List[UploadFile]] = FastAPIFile(None, description="Аудио файлы"),
+    videos: Optional[List[UploadFile]] = FastAPIFile(None, description="Видео файлы"),
+):
+    """
+    Multipart эндпоинт для запуска агентов с файлами.
+    Content-Type: multipart/form-data
+    """
+    logger.info(f"🚀 Multipart request: agent={agent_id}, message_len={len(message)}, "
+                f"files={len(files) if files else 0}, images={len(images) if images else 0}, "
+                f"audio={len(audio) if audio else 0}, videos={len(videos) if videos else 0}")
+    
+    return await _execute_agent_run(
+        agent_id=agent_id,
+        message=message,
+        stream=stream,
+        model=model,
+        user_id=user_id,
+        session_id=session_id,
+        files=files,
+        images=images,
+        audio=audio,
+        videos=videos
+    )
 
 
 @agents_router.get("/{agent_id}/sessions", status_code=status.HTTP_200_OK)

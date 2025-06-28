@@ -205,121 +205,18 @@ class ToolChangeEvent(BaseModel):
     details: Dict[str, Any] = Field(default_factory=dict)
 
 
-class SaaSMetrics(BaseModel):
-    """Метрики SaaS платформы"""
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
-    # Общие метрики
-    total_tenants: int = Field(default=0)
-    active_tenants_24h: int = Field(default=0)
-    total_agents: int = Field(default=0)
-    total_tools: int = Field(default=0)
-    
-    # Метрики по тенантам
-    agents_per_tenant: Dict[str, int] = Field(default_factory=dict)
-    tools_per_tenant: Dict[str, int] = Field(default_factory=dict)
-    api_calls_per_tenant: Dict[str, int] = Field(default_factory=dict)
-    
-    # Производительность
-    avg_agent_response_time: float = Field(default=0.0)
-    cache_hit_rate: float = Field(default=0.0)
-    error_rate: float = Field(default=0.0)
-    
-    # Безопасность
-    validation_failures_24h: int = Field(default=0)
-    sandbox_violations_24h: int = Field(default=0)
-    
-    # Использование ресурсов
-    cpu_usage_percent: float = Field(default=0.0)
-    memory_usage_percent: float = Field(default=0.0)
-    db_connections_active: int = Field(default=0)
-
-
-class TenantUsageStats(BaseModel):
-    """Статистика использования тенанта"""
-    tenant_id: str = Field(..., description="ID тенанта")
-    period_start: datetime = Field(..., description="Начало периода")
-    period_end: datetime = Field(..., description="Конец периода")
-    
-    # Использование
-    total_agent_runs: int = Field(default=0)
-    total_tool_calls: int = Field(default=0)
-    total_api_calls: int = Field(default=0)
-    
-    # Время выполнения
-    total_execution_time_seconds: float = Field(default=0.0)
-    avg_response_time_ms: float = Field(default=0.0)
-    
-    # Ошибки
-    total_errors: int = Field(default=0)
-    error_rate_percent: float = Field(default=0.0)
-    
-    # Лимиты
-    quota_usage_percent: float = Field(default=0.0)
-    rate_limit_hits: int = Field(default=0)
-
-
-class SecurityAuditLog(BaseModel):
-    """Лог аудита безопасности"""
-    tenant_id: str = Field(..., description="ID тенанта")
-    user_id: Optional[str] = Field(None, description="ID пользователя")
-    action: str = Field(..., description="Выполненное действие")
-    resource_type: Literal["agent", "tool", "team", "workflow"] = Field(..., description="Тип ресурса")
-    resource_id: str = Field(..., description="ID ресурса")
-    
-    # Детали
-    ip_address: Optional[str] = Field(None, description="IP адрес")
-    user_agent: Optional[str] = Field(None, description="User Agent")
-    success: bool = Field(..., description="Успешность операции")
-    error_message: Optional[str] = Field(None, description="Сообщение об ошибке")
-    
-    # Контекст безопасности
-    code_executed: Optional[str] = Field(None, description="Выполненный код (для инструментов)")
-    validation_result: Optional[Dict[str, Any]] = Field(None, description="Результат валидации")
-    
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-
-
 class HotReloadConfig(BaseModel):
-    """Конфигурация горячей перезагрузки"""
+    """Упрощенная конфигурация горячей перезагрузки"""
     enabled: bool = Field(default=True, description="Включена ли горячая перезагрузка")
     cache_ttl_seconds: int = Field(default=300, description="TTL кэша в секундах")
-    max_reload_attempts: int = Field(default=3, description="Максимальное количество попыток перезагрузки")
-    reload_delay_seconds: int = Field(default=1, description="Задержка между попытками")
-    
-    # Настройки уведомлений
-    enable_db_notifications: bool = Field(default=True, description="Использовать PostgreSQL NOTIFY")
-    enable_redis_pubsub: bool = Field(default=False, description="Использовать Redis pub/sub")
-    notification_channels: List[str] = Field(default_factory=lambda: ["agent_changes", "tool_changes"])
-    
-    # Настройки безопасности
-    validate_before_reload: bool = Field(default=True, description="Валидировать перед перезагрузкой")
-    rollback_on_error: bool = Field(default=True, description="Откатывать изменения при ошибке")
 
 
 class PlatformConfig(BaseModel):
-    """Общая конфигурация платформы"""
+    """Упрощенная конфигурация платформы"""
     platform_name: str = Field(default="Agent API Platform")
     version: str = Field(default="1.0.0")
-    
-    # Настройки по умолчанию
-    default_subscription_tier: SubscriptionTier = Field(default=SubscriptionTier.FREE)
     default_agent_model: str = Field(default="gpt-4.1")
-    
-    # Лимиты платформы
-    max_tenants: Optional[int] = Field(default=None, description="Максимальное количество тенантов")
-    max_agents_per_platform: Optional[int] = Field(default=None)
-    max_tools_per_platform: Optional[int] = Field(default=None)
-    
-    # Настройки безопасности
-    require_code_validation: bool = Field(default=True)
-    enable_audit_logging: bool = Field(default=True)
-    max_code_execution_time_seconds: int = Field(default=30)
-    
-    # Настройки производительности
     hot_reload: HotReloadConfig = Field(default_factory=HotReloadConfig)
-    enable_metrics_collection: bool = Field(default=True)
-    metrics_retention_days: int = Field(default=30)
 
 
 class StaticAgentResponse(BaseModel):

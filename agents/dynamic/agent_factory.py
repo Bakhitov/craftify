@@ -114,7 +114,9 @@ class DynamicAgentFactory:
             return agno_adapter.create_agent_safely(**agent_params)
             
         except Exception as e:
-            print(f"⚠️ Ошибка создания агента {agent_id}: {e}")
+            from agents.exceptions import handle_agent_error
+            error = handle_agent_error("create", agent_id, e, {"type": "dynamic"})
+            print(f"⚠️ {error}")
             return None
     
     @staticmethod
@@ -167,7 +169,9 @@ class DynamicAgentFactory:
                 return config
                 
         except Exception as e:
-            print(f"⚠️ Ошибка загрузки конфигурации агента {agent_id}: {e}")
+            from agents.exceptions import handle_agent_error
+            error = handle_agent_error("load_config", agent_id, e, {"type": "dynamic"})
+            print(f"⚠️ {error}")
             return None
     
     @staticmethod

@@ -63,3 +63,8 @@ def get_static_agent_details(agent_id: str) -> dict:
 def refresh_agent_cache(agent_id: Optional[str] = None):
     """Обновляет кэш агентов"""
     return agent_registry.refresh_cache(agent_id)
+
+
+def get_static_agent_basic_info(agent_id: str) -> dict:
+    """Быстрое получение базовой информации о статическом агенте"""
+    return agent_registry.get_static_agent_basic_info(agent_id)
